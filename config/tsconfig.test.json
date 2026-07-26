@@ -1,0 +1,38 @@
+{
+  // Separate compile for the unit tests.
+  //
+  // The main build emits ES modules for webpack, which Node can't require. This
+  // config re-emits the same sources as CommonJS into temp/ so the tests can run
+  // on plain Node with no extra dependencies — the project has no Jest setup, and
+  // adding one to an SPFx rig is more risk than a few pure-function tests warrant.
+  "extends": "../node_modules/@microsoft/rush-stack-compiler-4.7/includes/tsconfig-web.json",
+  "compilerOptions": {
+    "target": "es2017",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "jsx": "react",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "inlineSources": false,
+    "outDir": "../temp/test-build",
+    "rootDir": "..",
+    "noImplicitAny": true,
+    "strictNullChecks": false,
+    "noUnusedLocals": false,
+    "skipLibCheck": true,
+    "types": [],
+    "lib": ["es2017", "dom"]
+  },
+  "include": [
+    "../src/webparts/smartForms/models/index.ts",
+    "../src/webparts/smartForms/models/templates.ts",
+    "../src/webparts/smartForms/utils/formUtils.ts",
+    "../src/webparts/smartForms/utils/formula.ts",
+    "../src/webparts/smartForms/utils/sanitizeHtml.ts",
+    "../src/webparts/smartForms/utils/spFieldXml.ts",
+    "../src/webparts/smartForms/utils/analytics.ts",
+    "../src/webparts/smartForms/utils/theme.ts",
+    "../tests/**/*.ts"
+  ]
+}

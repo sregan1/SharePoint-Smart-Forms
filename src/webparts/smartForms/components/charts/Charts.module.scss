@@ -1,0 +1,418 @@
+@import '../tokens';
+
+// Chart chrome. The marks themselves are colored from validated palettes in
+// utils/theme.ts and passed in as fills — never styled here, so the color rules
+// stay in one auditable place.
+
+.chartRoot {
+  position: relative;
+  width: 100%;
+  font-family: $font-stack;
+}
+
+.svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+
+.axisLabel {
+  font-size: $text-xs;
+  fill: #{$fg-muted};
+}
+
+.valueLabel {
+  font-size: $text-xs;
+  font-weight: 600;
+  fill: #{$fg};
+  font-variant-numeric: tabular-nums;
+}
+
+.valueLabelInverse {
+  font-size: $text-xs;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+// ----- tooltip -----
+
+.tooltip {
+  position: absolute;
+  z-index: 40;
+  pointer-events: none;
+  min-width: 120px;
+  max-width: 240px;
+  padding: $space-2 $space-3;
+  border-radius: $radius-md;
+  background: #{$card-raised};
+  border: 1px solid #{$border};
+  box-shadow: $shadow-md;
+  font-size: $text-sm;
+  color: #{$fg};
+  transform: translate(-50%, -100%);
+}
+
+.tooltipTitle {
+  font-weight: 600;
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+
+.tooltipRow {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  color: #{$fg-muted};
+}
+
+.tooltipSwatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.tooltipValue {
+  margin-left: auto;
+  font-weight: 600;
+  color: #{$fg};
+  font-variant-numeric: tabular-nums;
+}
+
+// ----- legend -----
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-2 $space-3;
+  margin-top: $space-2;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-1;
+  font-size: $text-xs;
+  color: #{$fg-muted};
+}
+
+.legendSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+// ----- horizontal bar rows (HTML, not SVG: labels wrap and stay selectable) -----
+
+.barList {
+  display: flex;
+  flex-direction: column;
+  gap: $space-1;
+}
+
+.barRow {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  cursor: default;
+  border-radius: $radius-sm;
+  @include focus-ring(-2px);
+}
+
+.barRowClickable {
+  cursor: pointer;
+
+  &:hover {
+    background: #{$surface};
+  }
+}
+
+.barLabel {
+  width: 110px;
+  flex-shrink: 0;
+  font-size: $text-sm;
+  color: #{$fg};
+  @include truncate;
+}
+
+.barLabelWide {
+  width: 150px;
+  flex-shrink: 0;
+  font-size: $text-sm;
+  color: #{$fg};
+  @include truncate;
+}
+
+.barTrack {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 14px;
+  border-radius: $radius-sm;
+  background: #{$surface-2};
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  // 4px rounded data-end, square at the baseline
+  border-radius: 0 $radius-sm $radius-sm 0;
+  @include motion(width 0.3s ease);
+  min-width: 2px;
+}
+
+.barValue {
+  width: 78px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+// ----- stat tiles -----
+
+.statRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: $space-3;
+}
+
+.statTile {
+  display: flex;
+  flex-direction: column;
+  gap: $space-1;
+  padding: $space-3 $space-4;
+  border: 1px solid #{$border};
+  border-radius: $radius-lg;
+  background: #{$card};
+  min-width: 0;
+}
+
+.statLabel {
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.statValueRow {
+  display: flex;
+  align-items: baseline;
+  gap: $space-2;
+  flex-wrap: wrap;
+}
+
+.statValue {
+  font-size: $text-2xl;
+  font-weight: 600;
+  color: #{$fg};
+  line-height: 1.1;
+}
+
+.statValueHero {
+  font-size: 48px;
+  font-weight: 600;
+  color: #{$fg};
+  line-height: 1;
+}
+
+.statDelta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: $text-xs;
+  font-weight: 600;
+
+  i {
+    font-size: 10px;
+  }
+}
+
+.statDeltaGood {
+  color: #{$success};
+}
+
+.statDeltaBad {
+  color: #{$error};
+}
+
+.statDeltaFlat {
+  color: #{$fg-muted};
+}
+
+.statCaption {
+  font-size: $text-xs;
+  color: #{$fg-muted};
+}
+
+.statSpark {
+  margin-top: $space-1;
+}
+
+// ----- gauge -----
+
+.gaugeWrap {
+  display: flex;
+  align-items: center;
+  gap: $space-4;
+  flex-wrap: wrap;
+}
+
+.gaugeFigure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.gaugeValue {
+  font-size: $text-4xl;
+  font-weight: 700;
+  color: #{$fg};
+  line-height: 1;
+}
+
+.gaugeCaption {
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+// ----- donut -----
+
+.donutWrap {
+  display: flex;
+  align-items: center;
+  gap: $space-4;
+  flex-wrap: wrap;
+}
+
+.donutCenter {
+  font-size: $text-xl;
+  font-weight: 600;
+  fill: #{$fg};
+}
+
+.donutCenterSub {
+  font-size: $text-xs;
+  fill: #{$fg-muted};
+}
+
+.donutLegend {
+  flex: 1 1 140px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.donutLegendRow {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  font-size: $text-sm;
+  color: #{$fg};
+}
+
+.donutLegendLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  @include truncate;
+}
+
+.donutLegendValue {
+  flex-shrink: 0;
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  font-variant-numeric: tabular-nums;
+}
+
+// ----- diverging stacked bar (Likert) -----
+
+.divergingRow {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  margin-bottom: $space-1;
+}
+
+.divergingLabel {
+  width: 150px;
+  flex-shrink: 0;
+  font-size: $text-sm;
+  color: #{$fg};
+  @include truncate;
+}
+
+.divergingTrack {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  height: 18px;
+  border-radius: $radius-sm;
+  overflow: hidden;
+  background: #{$surface-2};
+}
+
+.divergingSegment {
+  height: 100%;
+  // the 2px surface gap is what separates touching segments; never a border
+  box-shadow: 2px 0 0 0 #{$card};
+  min-width: 0;
+}
+
+.divergingCenterLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #{$border-strong};
+}
+
+// ----- empty / no data -----
+
+.chartEmpty {
+  padding: $space-4;
+  text-align: center;
+  font-size: $text-sm;
+  color: #{$fg-subtle};
+  font-style: italic;
+}
+
+// ----- table fallback (the relief channel for sub-3:1 fills) -----
+
+.dataTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: $text-sm;
+
+  th,
+  td {
+    text-align: left;
+    padding: 4px $space-2;
+    border-bottom: 1px solid #{$border};
+  }
+
+  th {
+    font-size: $text-xs;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #{$fg-muted};
+    font-weight: 600;
+  }
+
+  td:last-child,
+  th:last-child {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+}

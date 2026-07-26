@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "c:\\Development\\SharePointSmartDataVisualization",
+      "c:\\Development\\SharePointSmartOrgChart",
+      "c:\\Development\\SharePointSmartStorageAnalyzer"
+    ]
+  }
+}

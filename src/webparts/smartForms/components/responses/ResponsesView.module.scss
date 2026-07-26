@@ -1,0 +1,538 @@
+@import '../tokens';
+
+.responses {
+  background: #{$card};
+  border: 1px solid #{$border};
+  border-radius: $radius-lg;
+  padding: $space-2 $space-4 $space-4;
+}
+
+.centered {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px $space-4;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: $space-2;
+  border-bottom: 1px solid #{$border};
+  margin-bottom: $space-2;
+}
+
+.commands {
+  :global(.ms-CommandBar) {
+    padding: 0;
+    background: transparent;
+  }
+}
+
+// ----- global filter bar: applies to every view at once -----
+
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  flex-wrap: wrap;
+  padding: $space-2 0;
+}
+
+.filterSearch {
+  flex: 1 1 220px;
+  max-width: 320px;
+  min-width: 160px;
+}
+
+.filterDropdown {
+  min-width: 150px;
+}
+
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-1;
+  padding: 3px $space-2;
+  border-radius: $radius-pill;
+  background: #{$accent-tint};
+  color: #{$accent};
+  font-size: $text-xs;
+  font-weight: 600;
+}
+
+.filterCount {
+  font-size: $text-sm;
+  color: #{$fg-muted};
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.empty {
+  padding: 40px $space-4;
+  text-align: center;
+  color: #{$fg-muted};
+}
+
+.emptyTitle {
+  font-size: $text-lg;
+  font-weight: 600;
+  color: #{$fg};
+  margin-bottom: $space-1;
+}
+
+.emptyBody {
+  font-size: $text-md;
+  margin: 0 auto $space-4;
+  max-width: 380px;
+}
+
+.emptyActions {
+  display: flex;
+  gap: $space-2;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.emptyIcon {
+  font-size: $text-4xl;
+  color: #{$fg-subtle};
+  display: block;
+  margin-bottom: $space-2;
+}
+
+.truncationNote {
+  margin-bottom: $space-2;
+}
+
+// ----- dashboard -----
+
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: $space-4;
+  padding-top: $space-2;
+}
+
+.dashboardSection {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+}
+
+.dashboardSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-2;
+  flex-wrap: wrap;
+}
+
+.dashboardSectionTitle {
+  font-size: $text-base;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #{$fg-muted};
+  margin: 0;
+}
+
+// KPI strip. Defined here rather than reused from the charts module because CSS
+// modules are per-file — a class from another module wouldn't resolve.
+.statRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: $space-3;
+}
+
+.timelineCard {
+  border: 1px solid #{$border};
+  border-radius: $radius-lg;
+  background: #{$card};
+  padding: $space-3 $space-4 $space-2;
+}
+
+.timelineHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-2;
+  margin-bottom: $space-2;
+  flex-wrap: wrap;
+}
+
+.timelineTitle {
+  font-size: $text-md;
+  font-weight: 600;
+  color: #{$fg};
+}
+
+// ----- question cards (shared by dashboard tiles and summary) -----
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: $space-3;
+  padding-top: $space-2;
+}
+
+.summaryGridWide {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: $space-3;
+  padding-top: $space-2;
+}
+
+.summaryCard {
+  border: 1px solid #{$border};
+  border-radius: $radius-lg;
+  padding: $space-3 $space-4;
+  background: #{$card};
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+}
+
+.summaryCardSpan2 {
+  grid-column: span 2;
+
+  @media (max-width: 760px) {
+    grid-column: span 1;
+  }
+}
+
+.summaryCardHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: $space-2;
+}
+
+.summaryCardIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: $radius-md;
+  background: #{$accent-tint};
+  border: 1px solid #{$accent-tint-strong};
+  color: #{$accent};
+  font-size: $text-md;
+  flex-shrink: 0;
+}
+
+.summaryCardTitleGroup {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.summaryCardTitle {
+  font-size: $text-md;
+  font-weight: 600;
+  color: #{$fg};
+  word-break: break-word;
+}
+
+.summaryCardMeta {
+  font-size: $text-xs;
+  color: #{$fg-muted};
+}
+
+.summaryCardActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.summaryCardBody {
+  min-width: 0;
+}
+
+.emptyCardText {
+  font-size: $text-sm;
+  color: #{$fg-subtle};
+  font-style: italic;
+}
+
+// ----- numeric stat strip inside a card -----
+
+.statsRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: $space-2;
+}
+
+.stat {
+  text-align: center;
+  background: #{$surface};
+  border: 1px solid #{$border};
+  border-radius: $radius-md;
+  padding: $space-2 $space-1;
+  min-width: 0;
+}
+
+.statValue {
+  display: block;
+  font-size: $text-xl;
+  font-weight: 600;
+  color: #{$fg};
+  font-variant-numeric: tabular-nums;
+}
+
+.statLabel {
+  display: block;
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+// ----- word frequency -----
+
+.wordCloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-1 $space-2;
+  align-items: baseline;
+}
+
+.wordItem {
+  border: none;
+  background: none;
+  padding: 1px 3px;
+  border-radius: $radius-sm;
+  font-family: inherit;
+  color: #{$fg};
+  cursor: pointer;
+  @include focus-ring(-1px);
+
+  &:hover {
+    background: #{$accent-tint};
+    color: #{$accent};
+  }
+}
+
+.textSampleList {
+  display: flex;
+  flex-direction: column;
+  gap: $space-1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.textSample {
+  font-size: $text-base;
+  color: #{$fg};
+  padding: $space-1 $space-2;
+  border-left: 2px solid #{$border};
+  background: #{$surface};
+  border-radius: 0 $radius-sm $radius-sm 0;
+  word-break: break-word;
+}
+
+// ----- segment (cross-tab) -----
+
+.segmentGroup {
+  display: flex;
+  flex-direction: column;
+  gap: $space-3;
+}
+
+.segmentBlock {
+  min-width: 0;
+}
+
+.segmentHeader {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  font-size: $text-sm;
+  font-weight: 600;
+  color: #{$fg};
+  margin-bottom: $space-1;
+  padding-bottom: 2px;
+  border-bottom: 1px solid #{$border};
+}
+
+.segmentCount {
+  margin-left: auto;
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  font-weight: 400;
+}
+
+.segmentNote {
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  margin-bottom: $space-2;
+}
+
+// ----- table view -----
+
+.tableWrap {
+  // the grid scrolls inside its own box; the page must never scroll sideways
+  overflow-x: auto;
+}
+
+.tableToolbar {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  flex-wrap: wrap;
+  padding-bottom: $space-2;
+}
+
+.selectionBar {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  padding: $space-2 $space-3;
+  border-radius: $radius-md;
+  background: #{$accent-tint};
+  color: #{$accent};
+  font-size: $text-base;
+  font-weight: 600;
+  margin-bottom: $space-2;
+  flex-wrap: wrap;
+}
+
+.selectionSpacer {
+  flex: 1 1 auto;
+}
+
+.cellLink {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: #{$accent};
+  cursor: pointer;
+  text-decoration: underline;
+  @include focus-ring(-1px);
+}
+
+.cellText {
+  font-size: $text-base;
+  color: #{$fg};
+}
+
+.cellMuted {
+  font-size: $text-base;
+  color: #{$fg-subtle};
+  font-style: italic;
+}
+
+// ----- detail panel -----
+
+.panelFooter {
+  display: flex;
+  gap: $space-2;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.panelFooterSpacer {
+  flex: 1 1 auto;
+}
+
+.detailMeta {
+  display: flex;
+  align-items: center;
+  gap: $space-3;
+  flex-wrap: wrap;
+  font-size: $text-sm;
+  color: #{$fg-muted};
+  margin-bottom: $space-3;
+  padding-bottom: $space-2;
+  border-bottom: 1px solid #{$border};
+}
+
+.detailMetaItem {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-1;
+}
+
+.detailList {
+  display: flex;
+  flex-direction: column;
+  gap: $space-3;
+}
+
+.detailRow {
+  border-bottom: 1px solid #{$surface-2};
+  padding-bottom: $space-2;
+}
+
+.detailLabel {
+  font-size: $text-sm;
+  font-weight: 600;
+  color: #{$fg-muted};
+  margin-bottom: 2px;
+}
+
+.detailValue {
+  font-size: $text-md;
+  color: #{$fg};
+  word-break: break-word;
+}
+
+.detailValueEmpty {
+  font-size: $text-md;
+  color: #{$fg-subtle};
+  font-style: italic;
+}
+
+.attachmentList {
+  display: flex;
+  flex-direction: column;
+  gap: $space-1;
+  margin-top: $space-1;
+}
+
+.attachmentRow {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  font-size: $text-base;
+}
+
+.attachmentLink {
+  color: #{$accent};
+  text-decoration: none;
+  @include truncate;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.signaturePreview {
+  max-width: 280px;
+  border: 1px solid #{$border};
+  border-radius: $radius-md;
+  // ink on paper, not a themed surface: see $paper in _tokens.scss
+  background: $paper;
+  display: block;
+  margin-top: $space-1;
+}
+
+// print the individual response cleanly
+@media print {
+  .panelFooter,
+  .toolbar,
+  .filterBar {
+    display: none;
+  }
+
+  .detailRow {
+    break-inside: avoid;
+  }
+}

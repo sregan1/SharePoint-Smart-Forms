@@ -1,0 +1,21 @@
+{
+  "@microsoft/generator-sharepoint": {
+    "plusBeta": false,
+    "isCreatingSolution": true,
+    "nodeVersion": "18.20.8",
+    "sdksVersions": {
+      "@microsoft/microsoft-graph-client": "3.0.2",
+      "@microsoft/teams-js": "2.12.0"
+    },
+    "version": "1.20.2",
+    "libraryName": "sharepoint-smart-forms",
+    "libraryId": "30bffa79-9a8a-4452-adb8-89a90e03151b",
+    "environment": "spo",
+    "packageManager": "npm",
+    "solutionName": "sharepoint-smart-forms",
+    "solutionShortDescription": "sharepoint-smart-forms description",
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "componentType": "webpart"
+  }
+}

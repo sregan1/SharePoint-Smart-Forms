@@ -1,0 +1,133 @@
+// Shared design tokens and mixins.
+//
+// Every color here resolves to a `--sf-*` custom property set at the root of the
+// web part by utils/theme.ts, which derives them from the SharePoint site theme
+// plus the form's accent color. The fallbacks in each var() are light-theme
+// values so the stylesheet still renders sensibly if the tokens never arrive
+// (SharePoint workbench, or a host that doesn't provide a theme).
+//
+// Rule of thumb: no literal hex in any component stylesheet. If you need a new
+// color, add a token.
+
+// ----- type scale -----
+
+$font-stack: 'Segoe UI', 'Segoe UI Web (West European)', -apple-system, BlinkMacSystemFont, sans-serif;
+
+$text-xs: 11px;
+$text-sm: 12px;
+$text-base: 13px;
+$text-md: 14px;
+$text-lg: 15px;
+$text-xl: 18px;
+$text-2xl: 22px;
+$text-3xl: 24px;
+$text-4xl: 32px;
+
+// ----- spacing -----
+
+$space-1: 4px;
+$space-2: 8px;
+$space-3: 12px;
+$space-4: 16px;
+$space-5: 20px;
+$space-6: 24px;
+$space-8: 32px;
+
+// ----- radii -----
+
+$radius-sm: 4px;
+$radius-md: 6px;
+$radius-lg: 8px;
+$radius-xl: 12px;
+$radius-2xl: 14px;
+$radius-pill: 999px;
+
+// ----- color tokens -----
+
+$bg: var(--sf-bg, #ffffff);
+$card: var(--sf-card, #ffffff);
+$card-raised: var(--sf-card-raised, #ffffff);
+$surface: var(--sf-surface, #faf9f8);
+$surface-2: var(--sf-surface-2, #f3f2f1);
+$surface-3: var(--sf-surface-3, #e1dfdd);
+
+$fg: var(--sf-fg, #323130);
+$fg-muted: var(--sf-fg-muted, #605e5c);
+$fg-subtle: var(--sf-fg-subtle, #a19f9d);
+
+$border: var(--sf-border, #edebe9);
+$border-muted: var(--sf-border-muted, #c8c6c4);
+$border-strong: var(--sf-border-strong, #8a8886);
+
+$accent: var(--sf-accent, #0078d4);
+$accent-fg: var(--sf-accent-fg, #ffffff);
+$accent-hover: var(--sf-accent-hover, #106ebe);
+$accent-tint: var(--sf-accent-tint, #eff6fc);
+$accent-tint-strong: var(--sf-accent-tint-strong, #deecf9);
+$accent-gradient-end: var(--sf-accent-gradient-end, #005a9e);
+
+$error: var(--sf-error, #a4262c);
+$error-tint: var(--sf-error-tint, #fdf3f4);
+$success: var(--sf-success, #0b6a0b);
+$success-tint: var(--sf-success-tint, #f1faf1);
+$warning: var(--sf-warning, #8a5700);
+$warning-tint: var(--sf-warning-tint, #fff9f0);
+
+/// Genuinely white, in every theme.
+///
+/// Signatures are captured as dark ink on a transparent canvas, so a themed
+/// surface behind one makes it invisible on a dark site. This is the one place a
+/// fixed colour is correct: it is standing in for paper, not for a UI surface.
+$paper: #ffffff;
+
+$shadow-sm: var(--sf-shadow-sm, 0 1px 4px rgba(0, 0, 0, 0.06));
+$shadow-md: var(--sf-shadow-md, 0 3px 12px rgba(0, 0, 0, 0.1));
+$shadow-lg: var(--sf-shadow-lg, 0 6px 20px rgba(0, 0, 0, 0.12));
+
+$focus: var(--sf-focus, #0078d4);
+
+// ----- mixins -----
+
+/// Visible keyboard focus that doesn't fire on mouse clicks.
+@mixin focus-ring($offset: 2px) {
+  &:focus-visible {
+    outline: 2px solid #{$focus};
+    outline-offset: $offset;
+  }
+}
+
+/// Card surface used by form cards, question cards and dashboard tiles.
+@mixin card($radius: $radius-xl, $shadow: $shadow-sm) {
+  background: #{$card};
+  border-radius: $radius;
+  box-shadow: #{$shadow};
+}
+
+/// Single-line truncation.
+@mixin truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/// Screen-reader-only text that stays focusable.
+@mixin visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/// Respect a user's reduced-motion preference for any transition.
+@mixin motion($properties...) {
+  transition: $properties;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}

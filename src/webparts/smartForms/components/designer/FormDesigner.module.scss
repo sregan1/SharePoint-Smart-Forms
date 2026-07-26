@@ -1,0 +1,809 @@
+@import '../tokens';
+
+// WYSIWYG designer canvas — the editor looks like the form itself.
+
+.designerShell {
+  display: flex;
+  align-items: flex-start;
+  gap: $space-4;
+}
+
+.designer {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 0 $space-4;
+}
+
+// ----- outline rail -----
+//
+// At 40 questions the canvas is an unmanageable scroll, so the rail doubles as
+// a table of contents and as the drop target for reordering.
+
+.outline {
+  position: sticky;
+  top: $space-2;
+  flex: 0 0 236px;
+  width: 236px;
+  max-height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #{$border};
+  border-radius: $radius-lg;
+  background: #{$card};
+  box-shadow: $shadow-sm;
+  overflow: hidden;
+
+  @media (max-width: 1100px) {
+    display: none;
+  }
+}
+
+.outlineHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-2;
+  padding: $space-2 $space-2 $space-2 $space-3;
+  border-bottom: 1px solid #{$border};
+  font-size: $text-xs;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #{$fg-muted};
+}
+
+.outlineSearch {
+  padding: $space-2;
+  border-bottom: 1px solid #{$border};
+}
+
+.outlineList {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: $space-1;
+}
+
+.outlineSectionLabel {
+  padding: $space-2 $space-2 $space-1;
+  font-size: $text-xs;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #{$accent};
+}
+
+.outlineItem,
+.outlineItemActive,
+.outlineItemDropBefore,
+.outlineItemDropAfter {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  width: 100%;
+  padding: 5px $space-2;
+  border: none;
+  border-radius: $radius-sm;
+  background: none;
+  font-family: inherit;
+  font-size: $text-base;
+  color: #{$fg};
+  text-align: left;
+  cursor: grab;
+  @include focus-ring(-2px);
+
+  &:hover {
+    background: #{$surface-2};
+  }
+}
+
+.outlineItemActive {
+  background: #{$accent-tint};
+  color: #{$accent};
+  font-weight: 600;
+}
+
+.outlineItemDropBefore {
+  box-shadow: inset 0 2px 0 0 #{$accent};
+}
+
+.outlineItemDropAfter {
+  box-shadow: inset 0 -2px 0 0 #{$accent};
+}
+
+.outlineNumber {
+  flex-shrink: 0;
+  width: 18px;
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  font-variant-numeric: tabular-nums;
+}
+
+.outlineTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  @include truncate;
+}
+
+.outlineIcon {
+  flex-shrink: 0;
+  font-size: $text-sm;
+  color: #{$fg-subtle};
+}
+
+.outlineEmpty {
+  padding: $space-3;
+  font-size: $text-sm;
+  color: #{$fg-muted};
+  font-style: italic;
+}
+
+// ----- form title block (editable in place, not buried in a panel) -----
+
+.titleCard {
+  @include card($radius-xl, $shadow-sm);
+  border-top: 4px solid #{$accent};
+  padding: $space-4 $space-5 $space-4;
+  margin-bottom: $space-3;
+}
+
+.titleInput {
+  :global(.ms-TextField-field) {
+    font-size: $text-2xl;
+    font-weight: 600;
+    padding-left: 0;
+    color: #{$fg};
+  }
+}
+
+.titleDescriptionInput {
+  :global(.ms-TextField-field) {
+    font-size: $text-md;
+    color: #{$fg-muted};
+    padding-left: 0;
+  }
+}
+
+// ----- section header card -----
+
+.sectionBlock {
+  margin-bottom: $space-2;
+}
+
+.sectionCard {
+  @include card($radius-xl, $shadow-sm);
+  border-top: 4px solid #{$accent};
+  padding: $space-3 $space-5 $space-3;
+  margin-bottom: $space-3;
+}
+
+.sectionChip {
+  display: inline-block;
+  font-size: $text-xs;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #{$accent};
+  margin-bottom: 2px;
+}
+
+.sectionHeaderRow {
+  display: flex;
+  align-items: flex-start;
+  gap: $space-2;
+}
+
+.sectionTitleFields {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sectionTitleInput {
+  :global(.ms-TextField-field) {
+    font-size: $text-xl;
+    font-weight: 600;
+    padding-left: 0;
+    color: #{$fg};
+  }
+}
+
+.sectionDescriptionInput {
+  :global(.ms-TextField-field) {
+    font-size: $text-base;
+    color: #{$fg-muted};
+    padding-left: 0;
+  }
+}
+
+.sectionActions {
+  display: flex;
+  flex-shrink: 0;
+}
+
+// ----- question cards -----
+
+.qCard,
+.qCardActive,
+.qCardDragging,
+.qCardDropBefore,
+.qCardDropAfter,
+.qCardFlagged {
+  @include card($radius-xl, $shadow-sm);
+  position: relative;
+  padding: $space-4 $space-5;
+  margin-bottom: $space-3;
+  border-left: 4px solid transparent;
+  @include motion(box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease);
+}
+
+.qCard {
+  cursor: pointer;
+
+  &:hover {
+    box-shadow: $shadow-md;
+  }
+}
+
+.qCardActive {
+  border-left-color: #{$accent};
+  box-shadow: $shadow-lg;
+}
+
+.qCardFlagged {
+  border-left-color: #{$warning};
+}
+
+.qCardDragging {
+  opacity: 0.4;
+}
+
+.qCardDropBefore {
+  box-shadow: 0 -3px 0 0 #{$accent}, $shadow-sm;
+}
+
+.qCardDropAfter {
+  box-shadow: 0 3px 0 0 #{$accent}, $shadow-sm;
+}
+
+.qDragHandle {
+  position: absolute;
+  top: $space-2;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 16px;
+  border: none;
+  background: none;
+  color: #{$fg-subtle};
+  cursor: grab;
+  opacity: 0;
+  padding: 0;
+  @include motion(opacity 0.15s ease);
+  @include focus-ring();
+
+  &:hover,
+  &:focus-visible {
+    opacity: 1;
+    color: #{$accent};
+  }
+
+  i {
+    font-size: $text-md;
+  }
+}
+
+.qCard:hover .qDragHandle,
+.qCardActive .qDragHandle {
+  opacity: 0.7;
+}
+
+.qLabelRow {
+  display: flex;
+  align-items: baseline;
+  gap: $space-2;
+}
+
+.qNumber {
+  font-size: $text-lg;
+  font-weight: 600;
+  color: #{$fg-muted};
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.qLabel {
+  font-size: $text-lg;
+  font-weight: 600;
+  color: #{$fg};
+}
+
+.qLabelEmpty {
+  font-size: $text-lg;
+  font-weight: 600;
+  color: #{$fg-subtle};
+}
+
+.requiredMark {
+  color: #{$error};
+  font-weight: 600;
+}
+
+@mixin meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-1;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-radius: $radius-pill;
+  padding: 2px $space-2;
+  margin-left: $space-1;
+
+  i {
+    font-size: 9px;
+  }
+}
+
+.branchChip {
+  @include meta-chip;
+  background: #{$accent-tint-strong};
+  color: #{$accent};
+}
+
+.issueChip {
+  @include meta-chip;
+  background: #{$warning-tint};
+  color: #{$warning};
+}
+
+.lockedChip {
+  @include meta-chip;
+  background: #{$surface-2};
+  color: #{$fg-muted};
+}
+
+.qHelpText {
+  font-size: $text-sm;
+  color: #{$fg-muted};
+  margin: 2px 0 0 22px;
+}
+
+.qTitleInput {
+  flex: 1 1 auto;
+
+  :global(.ms-TextField-field) {
+    font-size: $text-lg;
+    font-weight: 600;
+    padding-left: 0;
+    color: #{$fg};
+  }
+}
+
+// read-only rendering of the real input control inside the card
+.qPreviewControl {
+  pointer-events: none;
+  margin: $space-2 0 0 22px;
+  max-width: 560px;
+  opacity: 0.9;
+}
+
+.qPreviewControlLive {
+  margin: $space-2 0 0 22px;
+  max-width: 560px;
+}
+
+// ----- inline option editing -----
+
+.optionList {
+  margin: $space-2 0 0 22px;
+  max-width: 560px;
+}
+
+.optionRow,
+.optionRowDragging,
+.optionRowOver {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  margin-bottom: 2px;
+  border-radius: $radius-md;
+  padding-right: 2px;
+
+  &:hover {
+    background: #{$surface};
+  }
+}
+
+.optionRowDragging {
+  opacity: 0.4;
+}
+
+.optionRowOver {
+  box-shadow: inset 0 -2px 0 0 #{$accent};
+}
+
+.optionGrip {
+  color: #{$fg-subtle};
+  font-size: $text-sm;
+  flex-shrink: 0;
+  cursor: grab;
+}
+
+.optionIcon {
+  color: #{$fg-subtle};
+  font-size: $text-md;
+  flex-shrink: 0;
+}
+
+.optionInput {
+  flex: 1 1 auto;
+
+  :global(.ms-TextField-field) {
+    font-size: $text-md;
+  }
+}
+
+.optionImageInput {
+  flex: 1 1 auto;
+  max-width: 220px;
+
+  :global(.ms-TextField-field) {
+    font-size: $text-sm;
+  }
+}
+
+.optionThumb {
+  width: 32px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: $radius-sm;
+  border: 1px solid #{$border};
+  flex-shrink: 0;
+}
+
+.optionHint {
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  margin: $space-1 0 0 22px;
+}
+
+// ----- likert row/column editors -----
+
+.gridEditor {
+  display: flex;
+  gap: $space-4;
+  margin: $space-2 0 0 22px;
+  flex-wrap: wrap;
+}
+
+.gridEditorColumn {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.gridEditorLabel {
+  font-size: $text-xs;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #{$fg-muted};
+  margin-bottom: $space-1;
+}
+
+// ----- active-card footer -----
+
+.qFooter {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-top: 1px solid #{$border};
+  margin-top: $space-4;
+  padding-top: $space-2;
+  flex-wrap: wrap;
+}
+
+.footerSpacer {
+  flex: 1 1 auto;
+}
+
+.footerToggle {
+  margin: 0 $space-2 0 0;
+
+  :global(.ms-Toggle-label) {
+    font-size: $text-base;
+    font-weight: 400;
+    color: #{$fg};
+  }
+}
+
+.widthPicker {
+  display: inline-flex;
+  border: 1px solid #{$border-muted};
+  border-radius: $radius-md;
+  overflow: hidden;
+  margin-right: $space-2;
+}
+
+.widthOption,
+.widthOptionActive {
+  border: none;
+  background: #{$card};
+  padding: 4px $space-2;
+  font-family: inherit;
+  font-size: $text-xs;
+  font-weight: 600;
+  color: #{$fg-muted};
+  cursor: pointer;
+  min-width: 34px;
+  @include focus-ring(-2px);
+
+  &:hover {
+    background: #{$surface-2};
+  }
+
+  + .widthOption,
+  + .widthOptionActive {
+    border-left: 1px solid #{$border-muted};
+  }
+}
+
+.widthOptionActive {
+  background: #{$accent};
+  color: #{$accent-fg};
+
+  &:hover {
+    background: #{$accent-hover};
+  }
+}
+
+// ----- add buttons -----
+
+.addNewRow {
+  display: flex;
+  justify-content: center;
+  gap: $space-2;
+  padding: $space-1 0 $space-2;
+}
+
+.addNewButton {
+  border-radius: $radius-pill;
+  padding: 0 $space-6;
+  height: 38px;
+  font-weight: 600;
+  border-color: #{$border-muted};
+  background: #{$card};
+  color: #{$fg};
+  box-shadow: $shadow-sm;
+
+  &:hover {
+    border-color: #{$accent};
+    color: #{$accent};
+    background: #{$card};
+  }
+}
+
+.addSectionRow {
+  text-align: center;
+  padding-top: 2px;
+}
+
+.emptyCanvas {
+  text-align: center;
+  padding: 48px $space-6;
+  border: 1px dashed #{$border-muted};
+  border-radius: $radius-xl;
+  background: #{$surface};
+  margin-bottom: $space-3;
+
+  h3 {
+    margin: $space-3 0 $space-1;
+    font-size: $text-xl;
+    font-weight: 600;
+    color: #{$fg};
+  }
+
+  p {
+    margin: 0 auto $space-4;
+    max-width: 420px;
+    font-size: $text-base;
+    color: #{$fg-muted};
+  }
+}
+
+.emptyCanvasIcon {
+  font-size: $text-4xl;
+  color: #{$fg-subtle};
+}
+
+.emptyCanvasActions {
+  display: flex;
+  gap: $space-2;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+// ----- panels (question settings / form settings) -----
+
+.panelBody {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+  padding-bottom: $space-4;
+}
+
+.panelSectionTitle {
+  margin: $space-3 0 0;
+  font-size: $text-base;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #{$fg-muted};
+  border-bottom: 1px solid #{$border};
+  padding-bottom: $space-1;
+}
+
+.panelHint {
+  font-size: $text-sm;
+  color: #{$fg-muted};
+  margin: 0;
+}
+
+.panelFooter {
+  display: flex;
+  gap: $space-2;
+}
+
+.inlineFields {
+  display: flex;
+  gap: $space-2;
+
+  > * {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+
+// ----- branching rule editor -----
+
+.ruleGroup {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+  padding: $space-3;
+  border: 1px solid #{$border};
+  border-left: 3px solid #{$accent};
+  border-radius: $radius-md;
+  background: #{$surface};
+}
+
+.ruleRow {
+  display: flex;
+  gap: $space-2;
+  align-items: flex-end;
+}
+
+.ruleRowFields {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: $space-1;
+}
+
+.ruleMatchRow {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  font-size: $text-base;
+  color: #{$fg-muted};
+}
+
+.ruleMatchDropdown {
+  width: 120px;
+}
+
+.rulePreview {
+  font-size: $text-sm;
+  color: #{$fg-muted};
+  font-style: italic;
+  padding: $space-1 0;
+}
+
+// ----- color swatches -----
+
+.swatchLabel {
+  font-size: $text-md;
+  font-weight: 600;
+  padding: 5px 0;
+  color: #{$fg};
+  display: block;
+}
+
+.swatchRow {
+  display: flex;
+  gap: $space-2;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.swatch,
+.swatchSelected {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  @include motion(transform 0.1s ease);
+  @include focus-ring();
+
+  &:hover {
+    transform: scale(1.1);
+  }
+}
+
+.swatchSelected {
+  border-color: #{$fg};
+  box-shadow: 0 0 0 2px #{$card} inset;
+}
+
+.swatchCustom {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #{$border-muted};
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.advancedToggle {
+  margin-top: $space-2;
+  padding-left: 0;
+
+  :global(.ms-Button-label) {
+    font-weight: 600;
+  }
+}
+
+// ----- icon picker -----
+
+.iconGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+  gap: $space-1;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: $space-1;
+  border: 1px solid #{$border};
+  border-radius: $radius-md;
+}
+
+.iconOption,
+.iconOptionSelected {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: $radius-sm;
+  background: none;
+  color: #{$fg};
+  font-size: $text-xl;
+  cursor: pointer;
+  @include focus-ring(-2px);
+
+  &:hover {
+    background: #{$surface-2};
+  }
+}
+
+.iconOptionSelected {
+  border-color: #{$accent};
+  background: #{$accent-tint};
+  color: #{$accent};
+}

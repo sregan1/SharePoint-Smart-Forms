@@ -1,0 +1,323 @@
+@import './tokens';
+
+.smartForms {
+  font-family: $font-stack;
+  color: #{$fg};
+  min-height: 120px;
+}
+
+.loadingContainer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 64px $space-4;
+}
+
+// ----- first-run placeholder -----
+
+.placeholder {
+  text-align: center;
+  padding: 48px $space-6;
+  background: #{$surface};
+  border: 1px dashed #{$border-muted};
+  border-radius: $radius-xl;
+
+  h2 {
+    margin: $space-4 0 $space-2;
+    font-size: $text-3xl;
+    font-weight: 600;
+    color: #{$fg};
+  }
+
+  p {
+    margin: 0 auto $space-5;
+    max-width: 520px;
+    color: #{$fg-muted};
+    font-size: $text-md;
+  }
+}
+
+.placeholderIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: #{$accent};
+  color: #{$accent-fg};
+  font-size: 30px;
+}
+
+.placeholderHint {
+  font-style: italic;
+}
+
+.placeholderActions {
+  display: flex;
+  gap: $space-2;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.errorActions {
+  margin-top: $space-3;
+}
+
+// ----- owner header: pill tabs + actions -----
+
+.ownerBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: $space-3;
+  margin-bottom: $space-4;
+}
+
+.tabs {
+  display: inline-flex;
+  background: #{$surface-2};
+  border-radius: $radius-pill;
+  padding: $space-1;
+  gap: 2px;
+}
+
+.tab,
+.tabActive {
+  border: none;
+  background: transparent;
+  border-radius: $radius-pill;
+  padding: $space-2 $space-5;
+  font-family: inherit;
+  font-size: $text-md;
+  font-weight: 600;
+  color: #{$fg-muted};
+  cursor: pointer;
+  @include motion(background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease);
+  @include focus-ring(-2px);
+
+  &:hover {
+    color: #{$fg};
+  }
+}
+
+.tabActive {
+  background: #{$card};
+  color: #{$accent};
+  box-shadow: $shadow-sm;
+}
+
+.ownerBarRight {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-2;
+}
+
+// ----- save state chip -----
+//
+// SPFx only writes web part properties to the page when the author saves or
+// publishes it, so "saved" here means "captured in the property bag" and the
+// chip has to say the rest out loud.
+
+@mixin chip {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-1;
+  padding: 3px $space-2;
+  border-radius: $radius-pill;
+  font-size: $text-xs;
+  font-weight: 600;
+  white-space: nowrap;
+
+  i {
+    font-size: $text-xs;
+  }
+}
+
+.saveChipSaved {
+  @include chip;
+  background: #{$success-tint};
+  color: #{$success};
+}
+
+.saveChipPending {
+  @include chip;
+  background: #{$warning-tint};
+  color: #{$warning};
+}
+
+.saveChipUnpublished {
+  @include chip;
+  background: #{$accent-tint-strong};
+  color: #{$accent};
+  cursor: help;
+}
+
+.publishBanner {
+  margin-bottom: $space-3;
+}
+
+.publishError {
+  margin-bottom: $space-3;
+}
+
+.previewHint {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  font-size: $text-sm;
+  color: #{$accent};
+  background: #{$accent-tint};
+  border: 1px solid #{$accent-tint-strong};
+  border-radius: $radius-md;
+  padding: $space-2 $space-3;
+  margin-bottom: $space-3;
+
+  i {
+    font-size: $text-sm;
+  }
+}
+
+.previewHintSpacer {
+  flex: 1 1 auto;
+}
+
+// ----- share dialog -----
+
+.shareRow {
+  display: flex;
+  gap: $space-2;
+  align-items: flex-start;
+  padding-bottom: $space-2;
+}
+
+.shareField {
+  flex: 1 1 auto;
+}
+
+.shareNote {
+  display: flex;
+  gap: $space-2;
+  align-items: flex-start;
+  font-size: $text-sm;
+  color: #{$fg-muted};
+  background: #{$surface};
+  border-radius: $radius-md;
+  padding: $space-2 $space-3;
+  margin-top: $space-2;
+
+  i {
+    color: #{$accent};
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+}
+
+// ----- pre-flight issues -----
+
+.issueList {
+  display: flex;
+  flex-direction: column;
+  gap: $space-1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+@mixin issue-row {
+  display: flex;
+  align-items: flex-start;
+  gap: $space-2;
+  padding: $space-2;
+  border-radius: $radius-md;
+  font-size: $text-base;
+  background: #{$surface};
+
+  i {
+    flex-shrink: 0;
+    margin-top: 2px;
+    font-size: $text-base;
+  }
+}
+
+.issueError {
+  @include issue-row;
+
+  i {
+    color: #{$error};
+  }
+}
+
+.issueWarning {
+  @include issue-row;
+
+  i {
+    color: #{$warning};
+  }
+}
+
+.issueMessage {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.issueJump {
+  flex-shrink: 0;
+}
+
+// ----- templates gallery -----
+
+.templateGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: $space-3;
+  padding: $space-2 0 $space-4;
+}
+
+.templateCard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: $space-2;
+  text-align: left;
+  padding: $space-4;
+  border: 1px solid #{$border};
+  border-radius: $radius-lg;
+  background: #{$card};
+  cursor: pointer;
+  font-family: inherit;
+  color: #{$fg};
+  @include motion(border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease);
+  @include focus-ring();
+
+  &:hover {
+    border-color: #{$accent};
+    box-shadow: $shadow-md;
+    transform: translateY(-1px);
+  }
+}
+
+.templateIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: $radius-lg;
+  background: #{$accent-tint};
+  color: #{$accent};
+  font-size: $text-xl;
+}
+
+.templateName {
+  font-size: $text-md;
+  font-weight: 600;
+}
+
+.templateMeta {
+  font-size: $text-sm;
+  color: #{$fg-muted};
+}

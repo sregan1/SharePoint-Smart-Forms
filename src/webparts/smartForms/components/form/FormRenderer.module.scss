@@ -1,0 +1,1021 @@
+@import '../tokens';
+
+.formCard {
+  @include card($radius-2xl, $shadow-md);
+  overflow: hidden;
+}
+
+// ----- header -----
+
+.formHeader {
+  display: flex;
+  align-items: center;
+  gap: $space-4;
+  padding: $space-6 28px;
+  background: linear-gradient(135deg, #{$accent} 0%, #{$accent-gradient-end} 100%);
+  color: #{$accent-fg};
+
+  h2 {
+    margin: 0;
+    font-size: $text-2xl;
+    font-weight: 600;
+    color: #{$accent-fg};
+  }
+
+  p {
+    margin: $space-1 0 0;
+    font-size: $text-base;
+    color: #{$accent-fg};
+    opacity: 0.88;
+  }
+}
+
+.formHeaderIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: $radius-xl;
+  background: #{$accent-fg};
+  color: #{$accent};
+  font-size: $text-3xl;
+}
+
+.wizardHeader {
+  padding: $space-4 28px 0;
+}
+
+.stepDots {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  margin-bottom: $space-2;
+  flex-wrap: wrap;
+}
+
+.stepDot,
+.stepDotActive,
+.stepDotDone {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-1;
+  border: none;
+  background: none;
+  padding: 2px $space-2 2px $space-1;
+  border-radius: $radius-pill;
+  font-family: inherit;
+  font-size: $text-xs;
+  font-weight: 600;
+  color: #{$fg-subtle};
+  cursor: default;
+  @include focus-ring();
+}
+
+.stepDotDone {
+  color: #{$fg-muted};
+  cursor: pointer;
+
+  &:hover {
+    background: #{$surface-2};
+  }
+}
+
+.stepDotActive {
+  color: #{$accent};
+  background: #{$accent-tint};
+}
+
+.stepDotIndex {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #{$surface-3};
+  color: #{$fg-muted};
+  font-size: 10px;
+}
+
+.stepDotIndexActive {
+  background: #{$accent};
+  color: #{$accent-fg};
+}
+
+.formBody {
+  padding: $space-2 28px;
+}
+
+// ----- sections & fields -----
+
+.section {
+  margin: $space-4 0 $space-2;
+}
+
+.sectionHeader {
+  border-left: 3px solid #{$accent};
+  padding-left: $space-3;
+  margin-bottom: $space-3;
+
+  h3 {
+    margin: 0;
+    font-size: $text-lg;
+    font-weight: 600;
+    color: #{$fg};
+  }
+
+  p {
+    margin: 2px 0 0;
+    font-size: $text-sm;
+    color: #{$fg-muted};
+  }
+}
+
+.fieldGrid {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0 (-$space-2);
+}
+
+.fieldFull,
+.fieldHalf,
+.fieldThird {
+  box-sizing: border-box;
+  padding: $space-3 $space-2;
+  width: 100%;
+}
+
+.fieldHalf {
+  width: 50%;
+
+  @media (max-width: 640px) {
+    width: 100%;
+  }
+}
+
+.fieldThird {
+  width: 33.3333%;
+
+  @media (max-width: 900px) {
+    width: 50%;
+  }
+
+  @media (max-width: 640px) {
+    width: 100%;
+  }
+}
+
+.fieldLabel {
+  display: block;
+  font-size: $text-lg;
+  font-weight: 600;
+  margin-bottom: $space-1;
+  color: #{$fg};
+}
+
+.fieldNumber {
+  color: #{$fg-muted};
+  margin-right: $space-1;
+  font-variant-numeric: tabular-nums;
+}
+
+.requiredMark {
+  color: #{$error};
+}
+
+.fieldDescription {
+  font-size: $text-sm;
+  color: #{$fg-muted};
+  margin-bottom: $space-1;
+}
+
+.fieldError {
+  display: flex;
+  align-items: center;
+  gap: $space-1;
+  margin-top: $space-1;
+  font-size: $text-sm;
+  color: #{$error};
+
+  i {
+    font-size: $text-sm;
+  }
+}
+
+.readOnlyValue {
+  padding: 6px $space-2;
+  border: 1px solid #{$border};
+  border-radius: $radius-sm;
+  background: #{$surface};
+  color: #{$fg-muted};
+  font-size: $text-md;
+  min-height: 20px;
+}
+
+// ----- date & time -----
+
+.dateRow {
+  display: flex;
+  gap: $space-2;
+
+  > :first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+.timeDropdown {
+  width: 130px;
+  flex-shrink: 0;
+}
+
+// ----- choice -----
+
+.checkboxStack {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+  padding-top: $space-1;
+}
+
+.otherRow {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  padding-top: $space-1;
+}
+
+.otherInput {
+  flex: 1 1 auto;
+  max-width: 320px;
+}
+
+.selectionHint {
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  margin-top: $space-1;
+}
+
+// ----- image choice -----
+
+.imageChoiceGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: $space-3;
+  padding-top: $space-1;
+}
+
+.imageChoiceTile,
+.imageChoiceTileSelected {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+  padding: $space-2;
+  border: 2px solid #{$border};
+  border-radius: $radius-lg;
+  background: #{$card};
+  cursor: pointer;
+  font-family: inherit;
+  color: #{$fg};
+  text-align: center;
+  @include motion(border-color 0.15s ease, box-shadow 0.15s ease);
+  @include focus-ring();
+
+  &:hover {
+    border-color: #{$accent};
+  }
+}
+
+.imageChoiceTileSelected {
+  border-color: #{$accent};
+  background: #{$accent-tint};
+  box-shadow: $shadow-sm;
+}
+
+.imageChoiceThumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: $radius-md;
+  background: #{$surface-2};
+  display: block;
+}
+
+.imageChoicePlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: $radius-md;
+  background: #{$surface-2};
+  color: #{$fg-subtle};
+  font-size: $text-3xl;
+}
+
+.imageChoiceLabel {
+  font-size: $text-base;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+// ----- hyperlink -----
+
+.hyperlinkGroup {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+}
+
+// ----- address -----
+
+.addressGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: $space-2;
+
+  @media (max-width: 560px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.addressWide {
+  grid-column: 1 / -1;
+}
+
+// ----- scale (numbered button row; NPS is a preset of this) -----
+
+.scaleRow {
+  display: flex;
+  gap: $space-1;
+  flex-wrap: wrap;
+  padding-top: $space-1;
+}
+
+.scaleButton,
+.scaleButtonSelected {
+  min-width: 40px;
+  height: 40px;
+  padding: 0 $space-2;
+  border-radius: $radius-md;
+  border: 1px solid #{$border-muted};
+  background: #{$card};
+  font-family: inherit;
+  font-size: $text-md;
+  font-weight: 600;
+  color: #{$fg};
+  cursor: pointer;
+  @include motion(border-color 0.1s ease, background 0.1s ease, color 0.1s ease);
+  @include focus-ring();
+
+  &:hover {
+    border-color: #{$accent};
+    background: #{$accent-tint};
+  }
+}
+
+.scaleButtonSelected {
+  background: #{$accent};
+  border-color: #{$accent};
+  color: #{$accent-fg};
+
+  &:hover {
+    background: #{$accent-hover};
+    border-color: #{$accent-hover};
+    color: #{$accent-fg};
+  }
+}
+
+.scaleLabels {
+  display: flex;
+  justify-content: space-between;
+  gap: $space-4;
+  margin-top: $space-1;
+  max-width: 520px;
+  font-size: $text-sm;
+  color: #{$fg-muted};
+}
+
+// ----- rating -----
+
+.ratingRow {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-1;
+  padding-top: $space-1;
+}
+
+.ratingButton {
+  border: none;
+  background: none;
+  padding: 2px;
+  margin: 0;
+  cursor: pointer;
+  color: #{$border-muted};
+  font-size: 26px;
+  line-height: 1;
+  @include motion(color 0.1s ease, transform 0.1s ease);
+  @include focus-ring();
+
+  &:hover {
+    transform: scale(1.12);
+  }
+}
+
+.ratingButtonOn {
+  color: #{$accent};
+}
+
+.ratingHalfWrap {
+  position: relative;
+  display: inline-block;
+  line-height: 1;
+}
+
+.ratingHalfOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50%;
+  overflow: hidden;
+  color: #{$accent};
+  pointer-events: none;
+}
+
+.ratingClear {
+  margin-left: $space-2;
+}
+
+.ratingValue {
+  margin-left: $space-2;
+  font-size: $text-base;
+  color: #{$fg-muted};
+  font-variant-numeric: tabular-nums;
+}
+
+// ----- likert grid -----
+
+.likertWrap {
+  overflow-x: auto;
+  padding-top: $space-1;
+}
+
+.likertTable {
+  width: 100%;
+  min-width: 480px;
+  border-collapse: collapse;
+  font-size: $text-base;
+
+  th,
+  td {
+    padding: $space-2;
+    text-align: center;
+    border-bottom: 1px solid #{$border};
+  }
+
+  th:first-child,
+  td:first-child {
+    text-align: left;
+    min-width: 160px;
+    font-weight: 400;
+  }
+
+  thead th {
+    font-size: $text-sm;
+    font-weight: 600;
+    color: #{$fg-muted};
+    vertical-align: bottom;
+  }
+
+  tbody tr:hover {
+    background: #{$surface};
+  }
+}
+
+.likertRowLabel {
+  font-weight: 600;
+  color: #{$fg};
+}
+
+.likertRadio {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid #{$border-strong};
+  background: #{$card};
+  cursor: pointer;
+  padding: 0;
+  @include motion(border-color 0.1s ease, background 0.1s ease);
+  @include focus-ring();
+
+  &:hover {
+    border-color: #{$accent};
+  }
+}
+
+.likertRadioOn {
+  border-color: #{$accent};
+  border-width: 5px;
+  background: #{$card};
+}
+
+.likertMissing {
+  color: #{$error};
+  font-size: $text-sm;
+  margin-top: $space-1;
+}
+
+// ----- ranking -----
+
+.rankList {
+  display: flex;
+  flex-direction: column;
+  gap: $space-1;
+  padding-top: $space-1;
+}
+
+.rankItem,
+.rankItemDragging,
+.rankItemOver {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  padding: 6px $space-2 6px $space-3;
+  border: 1px solid #{$border};
+  border-radius: $radius-md;
+  background: #{$card};
+  cursor: grab;
+  @include motion(border-color 0.1s ease, box-shadow 0.1s ease);
+
+  &:hover {
+    border-color: #{$accent};
+    box-shadow: $shadow-sm;
+  }
+}
+
+.rankItemDragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+.rankItemOver {
+  border-color: #{$accent};
+  border-style: dashed;
+  background: #{$accent-tint};
+}
+
+.rankBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #{$accent};
+  color: #{$accent-fg};
+  font-size: $text-sm;
+  font-weight: 600;
+}
+
+.rankLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: $text-md;
+  @include truncate;
+}
+
+.rankGrip {
+  color: #{$fg-subtle};
+  font-size: $text-md;
+  flex-shrink: 0;
+}
+
+.rankButtons {
+  display: flex;
+  flex-shrink: 0;
+
+  button {
+    width: 26px;
+    height: 26px;
+
+    i {
+      font-size: $text-sm;
+    }
+  }
+}
+
+// ----- rich text -----
+
+.richText {
+  border: 1px solid #{$border-strong};
+  border-radius: $radius-sm;
+  background: #{$card};
+
+  &:focus-within {
+    border-color: #{$accent};
+    box-shadow: 0 0 0 1px #{$accent};
+  }
+}
+
+.richTextToolbar {
+  display: flex;
+  border-bottom: 1px solid #{$border};
+  background: #{$surface};
+}
+
+.richTextEditor {
+  min-height: 96px;
+  padding: $space-2 $space-3;
+  font-size: $text-md;
+  color: #{$fg};
+  outline: none;
+
+  &:empty::before {
+    content: attr(data-placeholder);
+    color: #{$fg-subtle};
+  }
+
+  a {
+    color: #{$accent};
+  }
+
+  ul,
+  ol {
+    margin: 0 0 0 $space-5;
+    padding: 0;
+  }
+}
+
+.richTextView {
+  font-size: $text-md;
+  color: #{$fg};
+  word-break: break-word;
+
+  a {
+    color: #{$accent};
+  }
+
+  ul,
+  ol {
+    margin: 0 0 0 $space-5;
+    padding: 0;
+  }
+
+  p {
+    margin: 0 0 $space-2;
+  }
+}
+
+// ----- file upload -----
+
+.dropZone,
+.dropZoneActive {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: $space-2;
+  padding: $space-5;
+  border: 2px dashed #{$border-muted};
+  border-radius: $radius-lg;
+  background: #{$surface};
+  text-align: center;
+  cursor: pointer;
+  @include motion(border-color 0.15s ease, background 0.15s ease);
+  @include focus-ring();
+}
+
+.dropZoneActive {
+  border-color: #{$accent};
+  background: #{$accent-tint};
+}
+
+.dropZoneIcon {
+  font-size: 26px;
+  color: #{$accent};
+}
+
+.dropZoneText {
+  font-size: $text-base;
+  color: #{$fg};
+  font-weight: 600;
+}
+
+.dropZoneHint {
+  font-size: $text-sm;
+  color: #{$fg-muted};
+}
+
+.hiddenInput {
+  @include visually-hidden;
+}
+
+.fileList {
+  display: flex;
+  flex-direction: column;
+  gap: $space-1;
+  margin-top: $space-2;
+}
+
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  padding: $space-1 $space-2;
+  border: 1px solid #{$border};
+  border-radius: $radius-md;
+  background: #{$card};
+  font-size: $text-base;
+}
+
+.fileIcon {
+  color: #{$accent};
+  flex-shrink: 0;
+}
+
+.fileName {
+  flex: 1 1 auto;
+  min-width: 0;
+  @include truncate;
+}
+
+.fileSize {
+  flex-shrink: 0;
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  font-variant-numeric: tabular-nums;
+}
+
+// ----- signature -----
+
+.signatureWrap {
+  display: inline-flex;
+  flex-direction: column;
+  gap: $space-2;
+  align-items: flex-start;
+}
+
+.signaturePad {
+  border: 1px solid #{$border-strong};
+  border-radius: $radius-md;
+  background: #{$card};
+  touch-action: none;
+  cursor: crosshair;
+  max-width: 100%;
+  display: block;
+
+  &:focus-visible {
+    outline: 2px solid #{$focus};
+    outline-offset: 2px;
+  }
+}
+
+.signaturePadFilled {
+  border-color: #{$accent};
+}
+
+.signatureActions {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+}
+
+.signatureHint {
+  font-size: $text-sm;
+  color: #{$fg-muted};
+}
+
+.signatureImage {
+  max-width: 320px;
+  border: 1px solid #{$border};
+  border-radius: $radius-md;
+  // ink on paper, not a themed surface: see $paper in _tokens.scss
+  background: $paper;
+}
+
+// ----- consent -----
+
+.consentBlock {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+  padding: $space-3;
+  border: 1px solid #{$border};
+  border-left: 3px solid #{$accent};
+  border-radius: $radius-md;
+  background: #{$surface};
+}
+
+.consentText {
+  font-size: $text-base;
+  color: #{$fg};
+  max-height: 200px;
+  overflow-y: auto;
+
+  a {
+    color: #{$accent};
+  }
+}
+
+// ----- static content block -----
+
+.contentBlock {
+  padding: $space-3 $space-4;
+  border-radius: $radius-md;
+  font-size: $text-md;
+  color: #{$fg};
+
+  a {
+    color: #{$accent};
+  }
+
+  p:first-child {
+    margin-top: 0;
+  }
+
+  p:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.contentPlain {
+  padding: 0;
+}
+
+.contentInfo {
+  background: #{$accent-tint};
+  border-left: 3px solid #{$accent};
+}
+
+.contentSuccess {
+  background: #{$success-tint};
+  border-left: 3px solid #{$success};
+}
+
+.contentWarning {
+  background: #{$warning-tint};
+  border-left: 3px solid #{$warning};
+}
+
+.contentDivider {
+  padding: 0;
+  border-top: 1px solid #{$border};
+  margin: $space-2 0;
+}
+
+.contentImage {
+  max-width: 100%;
+  border-radius: $radius-md;
+  display: block;
+}
+
+// ----- footer -----
+
+.formFooter {
+  display: flex;
+  align-items: center;
+  gap: $space-2;
+  padding: $space-4 28px $space-6;
+  flex-wrap: wrap;
+}
+
+.saveIndicator {
+  display: flex;
+  align-items: center;
+  gap: $space-1;
+  font-size: $text-sm;
+  color: #{$fg-muted};
+
+  i {
+    font-size: $text-sm;
+  }
+}
+
+.saveIndicatorError {
+  color: #{$error};
+}
+
+.footerSpacer {
+  flex: 1 1 auto;
+}
+
+.submitButton {
+  min-width: 120px;
+}
+
+.submitError {
+  margin: 0 28px;
+}
+
+// ----- confirmation & empty states -----
+
+.confirmation {
+  text-align: center;
+  padding: 56px $space-6;
+
+  h2 {
+    margin: $space-4 0 $space-2;
+    font-size: $text-3xl;
+    font-weight: 600;
+    color: #{$fg};
+  }
+
+  p {
+    margin: 0 auto $space-6;
+    max-width: 460px;
+    color: #{$fg-muted};
+  }
+}
+
+.confirmationIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: #{$success-tint};
+  color: #{$success};
+  font-size: 30px;
+}
+
+.confirmationActions {
+  display: flex;
+  gap: $space-2;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.emptyForm {
+  text-align: center;
+  padding: 48px $space-6;
+  color: #{$fg-muted};
+}
+
+.emptyFormIcon {
+  font-size: $text-4xl;
+  color: #{$fg-subtle};
+  display: block;
+  margin-bottom: $space-2;
+}
+
+.closedNotice {
+  text-align: center;
+  padding: 56px $space-6;
+
+  h2 {
+    margin: $space-4 0 $space-2;
+    font-size: $text-2xl;
+    font-weight: 600;
+    color: #{$fg};
+  }
+
+  p {
+    margin: 0 auto;
+    max-width: 460px;
+    color: #{$fg-muted};
+  }
+}
+
+.closedIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #{$surface-2};
+  color: #{$fg-muted};
+  font-size: 26px;
+}
+
+// ----- validation summary -----
+
+.errorSummary {
+  margin: 0 28px $space-3;
+}
+
+.errorSummaryList {
+  margin: $space-1 0 0;
+  padding-left: $space-5;
+
+  li {
+    margin-bottom: 2px;
+  }
+}
+
+.errorSummaryLink {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: #{$accent};
+  text-decoration: underline;
+  cursor: pointer;
+  @include focus-ring();
+}

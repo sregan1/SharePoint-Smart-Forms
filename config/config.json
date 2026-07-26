@@ -1,0 +1,16 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/config.2.0.schema.json",
+  "version": "2.0",
+  "bundles": {
+    "smart-forms-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/smartForms/SmartFormsWebPart.js",
+          "manifest": "./src/webparts/smartForms/SmartFormsWebPart.manifest.json"
+        }
+      ]
+    }
+  },
+  "externals": {},
+  "localizedResources": {}
+}
