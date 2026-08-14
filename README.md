@@ -1,10 +1,12 @@
 # SharePoint Smart Forms — SPFx Form Builder Web Part
 
-[![Website](https://img.shields.io/badge/Website-sharepointsmartsolutions.com-blue)](https://sharepointsmartsolutions.com/smart-forms) [![Download](https://img.shields.io/badge/Download-Latest%20Release-CA5010?logo=github&logoColor=white)](../../releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Website](https://img.shields.io/badge/Website-sharepointsmartsolutions.com-blue)](https://sharepointsmartsolutions.com/smart-forms) [![User Guide](https://img.shields.io/badge/User%20Guide-Read%20Now-green)](USER-GUIDE.md) [![Download](https://img.shields.io/badge/Download-Latest%20Release-CA5010?logo=github&logoColor=white)](../../releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Smart Forms brings a Microsoft Forms-style experience to SharePoint — form owners visually design forms with 24 question types (including several Forms doesn't have, like person pickers, live lookups from another list, calculated totals, signatures, and Likert grids), share a fill-in link with one click, and analyse responses on a built-in dashboard. Every submission lands in a regular SharePoint/Microsoft Lists list with real columns, so your data is never locked inside the form tool.
 
 ![SPFx](https://img.shields.io/badge/SPFx-1.20.0-0078D4?logo=microsoft&logoColor=white) ![React](https://img.shields.io/badge/React-17-61DAFB?logo=react&logoColor=black) ![TypeScript](https://img.shields.io/badge/TypeScript-4.7-3178C6?logo=typescript&logoColor=white) ![PnPjs](https://img.shields.io/badge/PnPjs-3.26-217346) ![Fluent UI](https://img.shields.io/badge/Fluent%20UI-8-742774)
+
+![The form designer canvas: an edit-in-place question card with branching, a section header, and the outline rail](docs/screenshots/01_designer_canvas.png)
 
 ---
 
@@ -26,6 +28,8 @@ Smart Forms brings a Microsoft Forms-style experience to SharePoint — form own
 | **Templates** | Eight starting points — customer feedback, event registration, IT request, expense claim, employee pulse, safety inspection, room booking, or blank |
 | **Automatic column provisioning** | Creates the matching SharePoint columns behind the scenes (clean internal names, grouped under "Smart Forms"), several at a time rather than one-by-one |
 
+![The Branching tab on the field editor panel, with an AND/OR condition group and a plain-English preview of the rule](docs/screenshots/02_field_editor_branching.png)
+
 ### Form filler experience
 
 | Feature | Description |
@@ -41,6 +45,8 @@ Smart Forms brings a Microsoft Forms-style experience to SharePoint — form own
 | **Smart choice display** | Choice questions render inline when the option list is short and switch to a dropdown for long lists; options can shuffle per respondent, and a write-in "Other" is one toggle |
 | **Files and signatures** | Drag-and-drop uploads with type/size limits, and a pen/touch signature pad — both stored as attachments on the response item |
 | **Calculated totals** | A read-only question that works out a total from other answers (`{Quantity} * {Unit price}`), updating as you type |
+
+![Wizard mode: a step-dot progress row above a checklist question, with Back and Next buttons](docs/screenshots/07_form_filler_wizard.png)
 
 ### Results (owners only)
 
@@ -58,6 +64,8 @@ Smart Forms brings a Microsoft Forms-style experience to SharePoint — form own
 | **Respondent receipts** | Optionally email each respondent a copy of their own answers |
 | **CSV export** | One-click export of the (filtered) responses, Excel-ready with UTF-8 BOM and formula-injection guarding |
 | **Permission aware** | Visitors only ever see the form — the designer and results appear only for users with Manage Lists permission |
+
+![The results dashboard: a KPI strip with sparklines, a responses-over-time area chart, and auto-selected highlight tiles](docs/screenshots/09_dashboard.png)
 
 ---
 
@@ -162,6 +170,27 @@ Emails are sent through SharePoint's built-in send-email API (`no-reply@sharepoi
 
 Respondents need permission to **add items** to the response list. If someone reports an error on submit, that is almost always the cause.
 
+![The Collect responses share dialog: a copy-able link plus reminders about respondent permissions and URL prefill](docs/screenshots/05_collect_responses_share.png)
+
+---
+
+## Screenshots
+
+| | |
+|---|---|
+| **Form designer canvas** | **Branching, validation & more** |
+| ![Form designer canvas](docs/screenshots/01_designer_canvas.png) | ![Field editor panel — Branching tab](docs/screenshots/02_field_editor_branching.png) |
+| **Form settings — Appearance** | **Templates gallery** |
+| ![Form settings panel — Appearance tab](docs/screenshots/03_form_settings_appearance.png) | ![Templates gallery](docs/screenshots/04_templates_gallery.png) |
+| **Collect responses — Share** | **Form filler — single page** |
+| ![Collect responses share dialog](docs/screenshots/05_collect_responses_share.png) | ![Form filler, single-page layout](docs/screenshots/06_form_filler_singlepage.png) |
+| **Form filler — Wizard mode** | **Confirmation screen** |
+| ![Form filler, wizard mode](docs/screenshots/07_form_filler_wizard.png) | ![Confirmation screen](docs/screenshots/08_form_confirmation.png) |
+| **Results dashboard** | **Summary — Compare by** |
+| ![Results dashboard](docs/screenshots/09_dashboard.png) | ![Summary view with Compare by segments](docs/screenshots/10_summary_compare.png) |
+| **Response table** | **Individual response detail** |
+| ![Response table](docs/screenshots/11_response_table.png) | ![Response detail panel](docs/screenshots/12_response_detail.png) |
+
 ---
 
 ## Project Structure
@@ -173,6 +202,9 @@ SharePointSmartForms/
 │   ├── serve.json.example           # workbench URL template (copy to serve.json)
 │   ├── tsconfig.test.json           # CommonJS re-compile for the test runner
 │   └── config.json                  # bundle definition
+├── docs/
+│   ├── generate-screenshots.js      # Puppeteer script to regenerate all screenshots
+│   └── screenshots/                 # UI screenshots (tracked in the repo)
 ├── tests/
 │   ├── harness.ts                   # dependency-free assertions and runner
 │   └── index.ts                     # unit tests for the pure modules

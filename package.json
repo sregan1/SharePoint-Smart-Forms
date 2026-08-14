@@ -40,6 +40,7 @@
     "@types/react-dom": "17.0.17",
     "@types/webpack-env": "1.15.2",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "gulp": "4.0.2"
+    "gulp": "4.0.2",
+    "puppeteer-core": "^24.43.1"
   }
 }

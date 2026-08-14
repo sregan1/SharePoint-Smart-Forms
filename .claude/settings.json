@@ -1,12 +1,13 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(node -e ' *)",
+      "Bash(npm ls *)"
+    ],
     "additionalDirectories": [
       "c:\\Development\\SharePointSmartDataVisualization",
       "c:\\Development\\SharePointSmartOrgChart",
       "c:\\Development\\SharePointSmartStorageAnalyzer"
-    ],
-    "allow": [
-      "Bash(node -e ' *)"
     ]
   }
 }
