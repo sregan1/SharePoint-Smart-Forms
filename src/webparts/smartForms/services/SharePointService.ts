@@ -11,7 +11,15 @@ import '@pnp/sp/sputilities';
 import '@pnp/sp/attachments';
 import '@pnp/sp/batching';
 import { PermissionKind } from '@pnp/sp/security';
+import { PrincipalType } from '@pnp/sp/types';
 import { IList } from '@pnp/sp/lists';
+import {
+  ChoiceFieldFormatType,
+  DateTimeFieldFormatType,
+  FieldUserSelectionMode,
+  IFieldAddResult,
+  UrlFieldFormatType
+} from '@pnp/sp/fields';
 import {
   FieldType,
   IAddressValue,
@@ -30,6 +38,7 @@ import {
 } from '../models';
 import {
   buildResponseEmailHtml,
+  effectiveChoices,
   formatAddress,
   inputFields,
   isFieldVisible,
@@ -39,8 +48,13 @@ import {
 } from '../utils/formUtils';
 import {
   buildFieldXml,
+  decimalsAttribute,
+  FIELD_GROUP,
+  lcidForCurrencySymbol,
+  noteLines,
   SF_DURATION_INTERNAL_NAME,
   SF_STATUS_INTERNAL_NAME,
+  spTypeForField,
   SYSTEM_COLUMNS,
   typeMatchesExisting
 } from '../utils/spFieldXml';
@@ -57,6 +71,16 @@ const MAX_RESPONSES = 20000;
 
 /** Cap on concurrent column-creation requests during provisioning. */
 const PROVISION_CONCURRENCY = 4;
+
+/**
+ * Hidden list that stores each form's definition JSON, keyed by web part
+ * instance id. This is what makes a form's questions durable independent of
+ * the page: SPFx only writes web part properties to the page itself on save
+ * or publish, but a response can be provisioned and shared long before that,
+ * so the definition needs somewhere to live the moment it's edited.
+ */
+const CONFIG_LIST_TITLE = 'Smart Forms Configuration';
+const CONFIG_DEFINITION_FIELD = 'SFDefinitionJson';
 
 export interface ISubmitOptions {
   durationSeconds?: number;
@@ -114,6 +138,91 @@ export class SharePointService {
 
   /** Cache of lookup option sets, keyed by list + column + filter. */
   private lookupCache: { [key: string]: string[] } = {};
+
+  /** In-flight (or completed) attempt to ensure the config list exists, so concurrent
+   *  saves don't race to create it twice; cleared on failure so the next call retries. */
+  private configListEnsured: Promise<void> | undefined;
+
+  // -------------------------------------------------------------------------
+  // form definition (durable, independent of page save)
+  // -------------------------------------------------------------------------
+
+  private escapeODataString(value: string): string {
+    return value.replace(/'/g, "''");
+  }
+
+  private async ensureConfigList(): Promise<void> {
+    if (!this.configListEnsured) {
+      this.configListEnsured = (async () => {
+        const result = await this.sp.web.lists.ensure(
+          CONFIG_LIST_TITLE,
+          'Stores Smart Forms form definitions, independent of page save. Created and managed by Smart Forms — do not delete.',
+          100,
+          false,
+          { Hidden: true, EnableAttachments: false, OnQuickLaunch: false }
+        );
+        // Check for the column directly rather than trusting result.created: if a
+        // previous run created the list but the field creation below failed (or
+        // the list was left over from some other partial run), created would be
+        // false forever after and the column would never get another chance.
+        const existingFields: { InternalName: string }[] = await result.list.fields.select(
+          'InternalName'
+        )();
+        const hasDefinitionField = existingFields.some(
+          (f) => f.InternalName === CONFIG_DEFINITION_FIELD
+        );
+        if (!hasDefinitionField) {
+          await result.list.fields.createFieldAsXml({
+            SchemaXml:
+              '<Field Type="Note" DisplayName="Definition" StaticName="' +
+              CONFIG_DEFINITION_FIELD +
+              '" Name="' +
+              CONFIG_DEFINITION_FIELD +
+              '" Group="Smart Forms" Required="FALSE" NumLines="6" RichText="FALSE" />',
+            Options: ADD_FIELD_INTERNAL_NAME_HINT
+          });
+        }
+      })().catch((error) => {
+        // let the next call retry rather than caching a permanent failure
+        this.configListEnsured = undefined;
+        throw error;
+      });
+    }
+    return this.configListEnsured;
+  }
+
+  /** Save (or create) a form's definition, keyed by its web part instance id. */
+  public async saveFormDefinition(instanceId: string, definitionJson: string): Promise<void> {
+    await this.ensureConfigList();
+    const list = this.sp.web.lists.getByTitle(CONFIG_LIST_TITLE);
+    const key = this.escapeODataString(instanceId);
+    const existing = await list.items.select('Id').filter("Title eq '" + key + "'").top(1)();
+    const payload = { Title: instanceId, [CONFIG_DEFINITION_FIELD]: definitionJson };
+    if (existing.length > 0) {
+      await list.items.getById(existing[0].Id).update(payload);
+    } else {
+      await list.items.add(payload);
+    }
+  }
+
+  /** The durably-stored definition for a web part instance, if one has been saved yet. */
+  public async loadFormDefinition(instanceId: string): Promise<string | undefined> {
+    try {
+      await this.ensureConfigList();
+      const list = this.sp.web.lists.getByTitle(CONFIG_LIST_TITLE);
+      const key = this.escapeODataString(instanceId);
+      const items = await list.items
+        .select(CONFIG_DEFINITION_FIELD)
+        .filter("Title eq '" + key + "'")
+        .top(1)();
+      if (items.length === 0) {
+        return undefined;
+      }
+      return (items[0] as Record<string, unknown>)[CONFIG_DEFINITION_FIELD] as string;
+    } catch {
+      return undefined;
+    }
+  }
 
   // -------------------------------------------------------------------------
   // lists & columns
@@ -278,23 +387,23 @@ export class SharePointService {
       toSync.push(field);
     });
 
-    await mapWithConcurrency(toCreate, PROVISION_CONCURRENCY, async (field) => {
-      await list.fields.createFieldAsXml({
-        SchemaXml: buildFieldXml(field),
-        Options: ADD_FIELD_INTERNAL_NAME_HINT
-      });
+    await mapWithConcurrency(toCreate, PROVISION_CONCURRENCY, async (field): Promise<undefined> => {
+      const actualInternalName = await this.createField(list, field);
+      if (actualInternalName && actualInternalName.toLowerCase() !== field.internalName.toLowerCase()) {
+        field.internalName = actualInternalName;
+      }
       await this.tryAddToDefaultView(list, field.internalName);
       created.push(field.internalName);
       return undefined;
     });
 
-    await mapWithConcurrency(toSync, PROVISION_CONCURRENCY, async (field) => {
+    await mapWithConcurrency(toSync, PROVISION_CONCURRENCY, async (field): Promise<undefined> => {
       await this.syncExistingField(list, field);
       return undefined;
     });
 
     // system columns: status (indexed, used by every responses query) and duration
-    await mapWithConcurrency(SYSTEM_COLUMNS, PROVISION_CONCURRENCY, async (column) => {
+    await mapWithConcurrency(SYSTEM_COLUMNS, PROVISION_CONCURRENCY, async (column): Promise<undefined> => {
       if (existingByName[column.internalName.toLowerCase()] !== undefined) {
         return undefined;
       }
@@ -304,9 +413,14 @@ export class SharePointService {
           Options: ADD_FIELD_INTERNAL_NAME_HINT
         });
         created.push(column.internalName);
-      } catch (error) {
-        // a pre-existing column under a different type shouldn't block publishing
-        logWarning('creating system column "' + column.internalName + '" (non-fatal)', error);
+      } catch {
+        try {
+          await this.createSystemFieldTyped(list, column.internalName);
+          created.push(column.internalName);
+        } catch (typedError) {
+          // a pre-existing column under a different type shouldn't block publishing
+          logWarning('creating system column "' + column.internalName + '" (non-fatal)', typedError);
+        }
       }
       return undefined;
     });
@@ -337,6 +451,159 @@ export class SharePointService {
     } catch (error) {
       // a column someone re-typed or locked shouldn't block publishing the form
       logWarning('syncing existing field "' + field.internalName + '" (non-fatal)', error);
+    }
+  }
+
+  /**
+   * Creates one form question's column. Sites with custom script disabled reject
+   * `createFieldAsXml` outright — CAML can carry a JSLink, so SharePoint blocks it
+   * wholesale on those sites and returns a garbled, mistranslated error that has
+   * nothing to do with permissions. The plain JSON field-creation endpoints can't
+   * carry a JSLink and aren't blocked, so they're tried as a fallback.
+   *
+   * That endpoint can't set the internal name directly: SharePoint derives it from
+   * the title given at creation time. Creating under the field's own (already
+   * clean) internal name as that seed, then renaming to the human-readable
+   * question text afterward, gets the same result — the internal name is fixed at
+   * creation, but the display name (Title) can always change later.
+   *
+   * Returns the internal name actually assigned, if the fallback path had to run
+   * (undefined when the normal CAML path worked, meaning nothing changed).
+   */
+  private async createField(list: IList, field: IFormField): Promise<string | undefined> {
+    try {
+      await list.fields.createFieldAsXml({
+        SchemaXml: buildFieldXml(field),
+        Options: ADD_FIELD_INTERNAL_NAME_HINT
+      });
+      return undefined;
+    } catch (error) {
+      logWarning(
+        'createFieldAsXml rejected for "' + field.internalName + '", retrying via the typed field API (non-fatal)',
+        error
+      );
+      return this.createFieldTyped(list, field);
+    }
+  }
+
+  /** JSON (non-CAML) field creation, used when a site blocks createFieldAsXml. */
+  private async createFieldTyped(list: IList, field: IFormField): Promise<string> {
+    const spType = spTypeForField(field);
+    const seedName = field.internalName;
+    let added: IFieldAddResult;
+
+    switch (spType) {
+      case 'Note':
+        added = await list.fields.addMultilineText(seedName, {
+          NumberOfLines: noteLines(field),
+          RichText: field.type === FieldType.RichText,
+          RestrictedMode: false,
+          AppendOnly: false,
+          AllowHyperlink: true
+        });
+        break;
+
+      case 'Number':
+        added = await list.fields.addNumber(seedName, {
+          MinimumValue: field.min,
+          MaximumValue: field.max
+        });
+        break;
+
+      case 'Currency':
+        added = await list.fields.addCurrency(seedName, {
+          CurrencyLocaleId: lcidForCurrencySymbol(field.currencySymbol)
+        });
+        break;
+
+      case 'DateTime':
+        added = await list.fields.addDateTime(seedName, {
+          DisplayFormat:
+            field.type === FieldType.Date && !field.includeTime
+              ? DateTimeFieldFormatType.DateOnly
+              : DateTimeFieldFormatType.DateTime
+        });
+        break;
+
+      case 'Choice':
+        added = await list.fields.addChoice(seedName, {
+          Choices: effectiveChoices(field),
+          EditFormat:
+            field.choiceDisplay === 'buttons' ? ChoiceFieldFormatType.RadioButtons : ChoiceFieldFormatType.Dropdown,
+          FillInChoice: field.allowOther === true
+        });
+        break;
+
+      case 'MultiChoice':
+        added = await list.fields.addMultiChoice(seedName, {
+          Choices: effectiveChoices(field),
+          FillInChoice: field.allowOther === true
+        });
+        break;
+
+      case 'Boolean':
+        added = await list.fields.addBoolean(seedName);
+        break;
+
+      case 'URL':
+        added = await list.fields.addUrl(seedName, { DisplayFormat: UrlFieldFormatType.Hyperlink });
+        break;
+
+      case 'User': {
+        const userProps: { SelectionMode: FieldUserSelectionMode; Mult?: boolean } = {
+          SelectionMode: field.allowGroups ? FieldUserSelectionMode.PeopleAndGroups : FieldUserSelectionMode.PeopleOnly
+        };
+        added = await list.fields.addUser(seedName, userProps);
+        break;
+      }
+
+      case 'UserMulti': {
+        const userProps: { SelectionMode: FieldUserSelectionMode; Mult?: boolean } = {
+          SelectionMode: field.allowGroups ? FieldUserSelectionMode.PeopleAndGroups : FieldUserSelectionMode.PeopleOnly,
+          Mult: true
+        };
+        added = await list.fields.addUser(seedName, userProps);
+        break;
+      }
+
+      default: {
+        const maxLength = field.maxLength && field.maxLength > 0 && field.maxLength <= 255 ? field.maxLength : 255;
+        added = await list.fields.addText(seedName, { MaxLength: maxLength });
+        break;
+      }
+    }
+
+    const props: Record<string, unknown> = {
+      Title: field.title || seedName,
+      Group: FIELD_GROUP,
+      Description: field.description || ''
+    };
+    if (spType === 'Number') {
+      const decimals = decimalsAttribute(field);
+      if (decimals !== 'Automatic') {
+        props.Decimals = Number(decimals);
+      }
+    } else if (spType === 'Currency') {
+      props.Decimals = field.decimalPlaces === undefined ? 2 : field.decimalPlaces;
+    } else if (spType === 'Boolean') {
+      props.DefaultValue = '0';
+    }
+    await added.field.update(props);
+
+    return added.data.InternalName || seedName;
+  }
+
+  /** JSON fallback for the SFStatus/SFDurationSeconds system columns. */
+  private async createSystemFieldTyped(list: IList, internalName: string): Promise<void> {
+    if (internalName === SF_STATUS_INTERNAL_NAME) {
+      const added = await list.fields.addChoice(internalName, {
+        Choices: ['Draft', 'Complete'],
+        Indexed: true
+      });
+      await added.field.update({ Title: 'Response status', Group: FIELD_GROUP, DefaultValue: 'Complete' });
+    } else if (internalName === SF_DURATION_INTERNAL_NAME) {
+      const added = await list.fields.addNumber(internalName, {});
+      await added.field.update({ Title: 'Time to complete (seconds)', Group: FIELD_GROUP, Decimals: 0 });
     }
   }
 
@@ -639,7 +906,7 @@ export class SharePointService {
     }
 
     // never let notification failures surface to the person submitting
-    await Promise.all(sends.map((p) => p.catch(() => undefined)));
+    await Promise.all(sends.map((p) => p.catch((): undefined => undefined)));
   }
 
   // -------------------------------------------------------------------------
@@ -931,7 +1198,7 @@ export class SharePointService {
       MaximumEntitySuggestions: 15,
       PrincipalSource: 15, // all sources
       // 1 = users, 4 = security groups, 8 = SharePoint groups; 13 covers all
-      PrincipalType: includeGroups ? 13 : 1,
+      PrincipalType: (includeGroups ? 13 : 1) as PrincipalType,
       QueryString: query.trim()
     });
     return results.map((r) => {

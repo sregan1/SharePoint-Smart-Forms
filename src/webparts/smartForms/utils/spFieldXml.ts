@@ -1,7 +1,7 @@
 import { FieldType, IFormField, isInputType } from '../models';
 import { effectiveChoices } from './formUtils';
 
-const FIELD_GROUP = 'Smart Forms';
+export const FIELD_GROUP = 'Smart Forms';
 
 const escapeXml = (value: string): string =>
   (value || '')
@@ -91,7 +91,7 @@ export const spTypeForField = (field: IFormField): string => {
 };
 
 /** Number of decimal places to provision, as SharePoint expects it. */
-const decimalsAttribute = (field: IFormField): string => {
+export const decimalsAttribute = (field: IFormField): string => {
   switch (field.type) {
     case FieldType.Rating:
       return field.allowHalfRating ? '1' : '0';
@@ -249,7 +249,7 @@ export const buildFieldXml = (field: IFormField): string => {
   }
 };
 
-const noteLines = (field: IFormField): number => {
+export const noteLines = (field: IFormField): number => {
   switch (field.type) {
     case FieldType.Ranking:
       return 3;

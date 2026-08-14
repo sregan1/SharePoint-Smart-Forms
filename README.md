@@ -16,6 +16,7 @@ Smart Forms brings a Microsoft Forms-style experience to SharePoint — form own
 |---|---|
 | **Edit-in-place designer** | The editor *is* the form — click any question card and edit it right there: type into the label, edit options inline, flip Required in the card footer. The form title and description sit at the top of the canvas, not behind a panel |
 | **Drag to reorder** | Drag questions by their grip, or from the outline rail — including across section boundaries. Arrow keys work on the grip for keyboard reordering |
+| **Insert anywhere** | Every question's **…** menu has an **Insert question below** picker, so a new question can be dropped in right after any existing one instead of adding at the end and dragging it into place |
 | **Outline rail** | A live table of contents for long forms: jump to any question, search by text, and see at a glance which questions have branching or a problem |
 | **24 question types** | Short/long/formatted text · number (plain, currency or percentage) · calculated · date (with optional time) · time · choice · image choice · **lookup from another list** · yes/no · consent · ranking · rating (stars/hearts/thumbs, optional halves) · opinion scale · slider · **Likert grid** · email · phone · address · link · person · **file upload** · **signature** · text block |
 | **Presets** | One-click NPS (0–10), satisfaction (1–5), currency and percentage questions built on the general types |
@@ -147,7 +148,7 @@ Almost everything is edited in place on the page. The property pane only picks t
 | **Notifications** | Who gets emailed each response, and respondent receipts |
 | **Access** | Open/close dates, response cap, one-response-per-person, save-and-resume, closed message |
 
-Per-question settings — branching, validation, placeholders, defaults, per-type options — live in the question's **…** menu under **Branching, validation & more**.
+Per-question settings — per-type options, branching, and validation (placeholders, defaults, required messages, patterns) — live in the question's **…** menu under **Branching, validation & more**, split into **Options** / **Branching** / **Validation** tabs.
 
 Emails are sent through SharePoint's built-in send-email API (`no-reply@sharepointonline.com`), so recipients must be **users in your Microsoft 365 organization** — external addresses are dropped. Notification failures never block a submission.
 

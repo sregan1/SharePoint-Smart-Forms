@@ -1,7 +1,6 @@
 import * as React from 'react';
 import * as ReactDom from 'react-dom';
 import { DisplayMode, Version } from '@microsoft/sp-core-library';
-import { IReadonlyTheme, ThemeProvider } from '@microsoft/sp-component-base';
 import {
   IPropertyPaneConfiguration,
   IPropertyPaneDropdownOption,
@@ -19,6 +18,13 @@ import '@pnp/sp/items';
 import '@pnp/sp/fields';
 import '@pnp/sp/views';
 
+// Type-only: IReadonlyTheme is an interface, so this import is erased at
+// compile time and @microsoft/sp-component-base never becomes a runtime AMD
+// dependency of this bundle. The theme itself arrives via onThemeChanged,
+// which BaseClientSideWebPart calls for us — consuming ThemeProvider from
+// the service scope is not required and adds an external for no benefit.
+import type { IReadonlyTheme } from '@microsoft/sp-component-base';
+
 import { SharePointService } from './services/SharePointService';
 import { SmartForms } from './components/SmartForms';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -34,41 +40,53 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
   private spService: SharePointService;
   private availableLists: IPropertyPaneDropdownOption[] = [];
   private listsLoaded = false;
+  private paneStartDeferred = false;
+  private initialized = false;
   private createListStatus = '';
   private currentTheme: IReadonlyTheme | undefined;
 
-  protected async onInit(): Promise<void> {
+  public async onInit(): Promise<void> {
     await super.onInit();
-    debugLog('onInit starting', {
-      version: this.manifest.version,
+    const sp = spfi().using(SPFx(this.context));
+    this.spService = new SharePointService(sp);
+    // From here on this.properties / this.displayMode are safe to read, so
+    // onThemeChanged is allowed to trigger repaints.
+    this.initialized = true;
+    debugLog('onInit complete', {
       listId: this.properties.listId,
       displayMode: DisplayMode[this.displayMode]
     });
-    try {
-      const sp = spfi().using(SPFx(this.context));
-      this.spService = new SharePointService(sp);
-
-      // The site theme drives every color in the UI. Without it the form renders
-      // its own light palette on a dark-themed site and is unreadable. Read the
-      // initial value here; the base class calls onThemeChanged for later updates.
-      const themeProvider = this.context.serviceScope.consume(ThemeProvider.serviceKey);
-      this.currentTheme = themeProvider.tryGetTheme();
-      debugLog('onInit complete', { hasTheme: !!this.currentTheme });
-    } catch (error) {
-      // onInit throwing is the classic "web part shows nothing, nothing in the
-      // console" failure — SPFx's own handling of a rejected onInit doesn't
-      // always surface a clear message, so log one explicitly here.
-      logError('onInit', error);
-      throw error;
+    // The pane may have tried to open before we were ready (see
+    // onPropertyPaneConfigurationStart); pick up the work it had to skip.
+    if (this.paneStartDeferred) {
+      this.paneStartDeferred = false;
+      this.loadAvailableLists();
     }
   }
 
   protected onThemeChanged(theme: IReadonlyTheme | undefined): void {
     this.currentTheme = theme;
+    // SPFx raises the first theme change *before* onInit, while this.properties
+    // and this.displayMode are still unavailable — touching either from render()
+    // at that point throws inside the host's theme bootstrap, which aborts the
+    // whole component load and surfaces only as "ERROR: [object Object]".
+    // There is nothing to repaint yet anyway: SPFx renders once onInit resolves,
+    // and currentTheme above is already stored for that first paint.
+    if (!this.initialized) {
+      return;
+    }
     this.render();
   }
 
   public render(): void {
+    // This guard must come first and must not touch this.properties or
+    // this.displayMode: render() can be reached before SPFx has initialized
+    // the component, and those getters throw at that point. (Note that a
+    // debugLog(...) call here is not safe either — its argument object is
+    // evaluated eagerly even when debug logging is switched off.)
+    if (!this.spService) {
+      return;
+    }
     debugLog('render', { listId: this.properties.listId, displayMode: DisplayMode[this.displayMode] });
     const element = React.createElement(
       ErrorBoundary,
@@ -76,11 +94,15 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
       React.createElement(SmartForms, {
         listId: this.properties.listId,
         formDefinitionJson: this.properties.formDefinition,
+        instanceId: this.context.instanceId,
         spService: this.spService,
         isEditMode: this.displayMode === DisplayMode.Edit,
         theme: this.currentTheme,
         onConfigure: () => this.context.propertyPane.open(),
         onFormDefinitionChange: (definitionJson: string) => {
+          // kept as a lightweight mirror on the page property (useful if the
+          // page is exported/copied); SharePointService.saveFormDefinition is
+          // what actually makes the edit durable, independent of page save.
           this.properties.formDefinition = definitionJson;
         }
       })
@@ -98,9 +120,22 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
   }
 
   protected onPropertyPaneConfigurationStart(): void {
+    // Adding the web part to a page auto-opens the property pane, and that can
+    // happen before the async onInit has resolved — so spService may not exist
+    // yet. Dereferencing it here throws inside SPFx's property-pane bootstrap,
+    // where the exception surfaces only as an opaque error tile. Defer instead;
+    // onInit picks this up as soon as the service is available.
     if (this.listsLoaded) {
       return;
     }
+    if (!this.spService) {
+      this.paneStartDeferred = true;
+      return;
+    }
+    this.loadAvailableLists();
+  }
+
+  private loadAvailableLists(): void {
     this.spService
       .getAvailableLists()
       .then((lists) => {
@@ -211,7 +246,7 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
               groupFields: [
                 PropertyPaneLabel('tipPublish', {
                   text:
-                    'The form is stored with the page, so save or publish the page after editing questions.'
+                    'Questions and settings save automatically as you edit them — no need to save or publish the page.'
                 }),
                 PropertyPaneLabel('tipPermissions', {
                   text:

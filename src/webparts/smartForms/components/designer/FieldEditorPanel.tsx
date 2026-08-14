@@ -9,6 +9,8 @@ import {
   MessageBarType,
   Panel,
   PanelType,
+  Pivot,
+  PivotItem,
   PrimaryButton,
   TextField,
   Toggle
@@ -111,7 +113,7 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
           setLists(available);
         }
       })
-      .catch(() => undefined);
+      .catch((): undefined => undefined);
     return () => {
       cancelled = true;
     };
@@ -433,128 +435,148 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
           </>
         ) : (
           <>
-            {/* ----- Branching ----- */}
-            <h4 className={styles.panelSectionTitle}>Branching</h4>
-            {otherFields.length === 0 ? (
-              <p className={styles.panelHint}>
-                Add another question first — branching needs something to depend on.
-              </p>
-            ) : (
-              <>
-                <Toggle
-                  label="Only show this question when other answers match"
-                  checked={conditions.length > 0}
-                  onChange={(_e, checked) => {
-                    if (checked) {
-                      addCondition();
-                    } else {
-                      setConditions([]);
-                    }
-                  }}
-                />
-                {conditions.length > 0 && (
-                  <div className={styles.ruleGroup}>
-                    {conditions.length > 1 && (
-                      <div className={styles.ruleMatchRow}>
-                        <span>Match</span>
-                        <Dropdown
-                          className={styles.ruleMatchDropdown}
-                          options={[
-                            { key: 'all', text: 'all of these' },
-                            { key: 'any', text: 'any of these' }
-                          ]}
-                          selectedKey={match}
-                          onChange={(_e, option) =>
-                            option && setConditions(conditions, option.key as ConditionMatch)
+            <Pivot aria-label="Question settings" defaultSelectedKey="options">
+              {/* ----- Per-type options ----- */}
+              <PivotItem headerText="Options" itemKey="options">
+                <div className={styles.panelTabContent}>{renderOptionsTab()}</div>
+              </PivotItem>
+
+              {/* ----- Branching ----- */}
+              <PivotItem headerText="Branching" itemKey="branching">
+                <div className={styles.panelTabContent}>
+                  {otherFields.length === 0 ? (
+                    <p className={styles.panelHint}>
+                      Add another question first — branching needs something to depend on.
+                    </p>
+                  ) : (
+                    <>
+                      <Toggle
+                        label="Only show this question when other answers match"
+                        checked={conditions.length > 0}
+                        onChange={(_e, checked) => {
+                          if (checked) {
+                            addCondition();
+                          } else {
+                            setConditions([]);
                           }
-                        />
-                      </div>
-                    )}
-                    {conditions.map(renderCondition)}
-                    <ActionButton
-                      iconProps={{ iconName: 'Add' }}
-                      text="Add condition"
-                      onClick={addCondition}
-                    />
-                    <div className={styles.rulePreview}>{rulePreview()}</div>
-                  </div>
-                )}
-              </>
-            )}
+                        }}
+                      />
+                      {conditions.length > 0 && (
+                        <div className={styles.ruleGroup}>
+                          {conditions.length > 1 && (
+                            <div className={styles.ruleMatchRow}>
+                              <span>Match</span>
+                              <Dropdown
+                                className={styles.ruleMatchDropdown}
+                                options={[
+                                  { key: 'all', text: 'all of these' },
+                                  { key: 'any', text: 'any of these' }
+                                ]}
+                                selectedKey={match}
+                                onChange={(_e, option) =>
+                                  option && setConditions(conditions, option.key as ConditionMatch)
+                                }
+                              />
+                            </div>
+                          )}
+                          {conditions.map(renderCondition)}
+                          <ActionButton
+                            iconProps={{ iconName: 'Add' }}
+                            text="Add condition"
+                            onClick={addCondition}
+                          />
+                          <div className={styles.rulePreview}>{rulePreview()}</div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </PivotItem>
 
-            {/* ----- Help & prompts ----- */}
-            <h4 className={styles.panelSectionTitle}>Help &amp; prompts</h4>
-            <TextField
-              label="Help text"
-              value={field.description || ''}
-              placeholder="Shown under the question label"
-              onChange={(_e, v) => set({ description: v })}
-            />
-            {supportsPlaceholder && (
-              <TextField
-                label={field.type === FieldType.Consent ? 'Checkbox label' : 'Placeholder'}
-                value={field.placeholder || ''}
-                onChange={(_e, v) => set({ placeholder: v })}
-              />
-            )}
-            {supportsDefault && (
-              <TextField
-                label="Default answer"
-                value={field.defaultValue || ''}
-                description={defaultValueHint()}
-                onChange={(_e, v) => set({ defaultValue: v })}
-              />
-            )}
-            <TextField
-              label="Custom required message"
-              value={field.requiredMessage || ''}
-              placeholder={(field.title || 'This question') + ' is required'}
-              description="Shown instead of the standard message when this question is left blank"
-              disabled={field.required !== true}
-              onChange={(_e, v) => set({ requiredMessage: v })}
-            />
-            <Toggle
-              label="Read-only (answer can only come from a prefilled link)"
-              checked={field.readOnly === true}
-              onChange={(_e, checked) => set({ readOnly: checked === true })}
-            />
-
-            {/* ----- Validation ----- */}
-            {(supportsPattern || isNumeric || field.type === FieldType.Text || field.type === FieldType.MultilineText) && (
-              <>
-                <h4 className={styles.panelSectionTitle}>Validation</h4>
-                {(field.type === FieldType.Text || field.type === FieldType.MultilineText) && (
+              {/* ----- Help & prompts, validation ----- */}
+              <PivotItem headerText="Validation" itemKey="validation">
+                <div className={styles.panelTabContent}>
                   <TextField
-                    label="Maximum length"
-                    value={field.maxLength === undefined ? '' : String(field.maxLength)}
-                    placeholder="255"
-                    onChange={(_e, v) => set({ maxLength: numberOrUndefined(v) })}
+                    label="Help text"
+                    value={field.description || ''}
+                    placeholder="Shown under the question label"
+                    onChange={(_e, v) => set({ description: v })}
                   />
-                )}
-                {supportsPattern && (
-                  <>
+                  {supportsPlaceholder && (
                     <TextField
-                      label="Must match this pattern"
-                      value={field.pattern || ''}
-                      placeholder="^[A-Z]{2}\d{4}$"
-                      description="A regular expression. Leave blank for no pattern check."
-                      onChange={(_e, v) => set({ pattern: v })}
+                      label={field.type === FieldType.Consent ? 'Checkbox label' : 'Placeholder'}
+                      value={field.placeholder || ''}
+                      onChange={(_e, v) => set({ placeholder: v })}
                     />
+                  )}
+                  {supportsDefault && (
                     <TextField
-                      label="Message when the pattern doesn't match"
-                      value={field.patternMessage || ''}
-                      placeholder="This answer is not in the expected format"
-                      disabled={!field.pattern}
-                      onChange={(_e, v) => set({ patternMessage: v })}
+                      label="Default answer"
+                      value={field.defaultValue || ''}
+                      description={defaultValueHint()}
+                      onChange={(_e, v) => set({ defaultValue: v })}
                     />
-                  </>
-                )}
-              </>
-            )}
+                  )}
+                  <TextField
+                    label="Custom required message"
+                    value={field.requiredMessage || ''}
+                    placeholder={(field.title || 'This question') + ' is required'}
+                    description="Shown instead of the standard message when this question is left blank"
+                    disabled={field.required !== true}
+                    onChange={(_e, v) => set({ requiredMessage: v })}
+                  />
+                  <Toggle
+                    label="Read-only (answer can only come from a prefilled link)"
+                    checked={field.readOnly === true}
+                    onChange={(_e, checked) => set({ readOnly: checked === true })}
+                  />
+                  {(supportsPattern ||
+                    isNumeric ||
+                    field.type === FieldType.Text ||
+                    field.type === FieldType.MultilineText) && (
+                    <>
+                      <h4 className={styles.panelSectionTitle}>Validation rules</h4>
+                      {(field.type === FieldType.Text || field.type === FieldType.MultilineText) && (
+                        <TextField
+                          label="Maximum length"
+                          value={field.maxLength === undefined ? '' : String(field.maxLength)}
+                          placeholder="255"
+                          onChange={(_e, v) => set({ maxLength: numberOrUndefined(v) })}
+                        />
+                      )}
+                      {supportsPattern && (
+                        <>
+                          <TextField
+                            label="Must match this pattern"
+                            value={field.pattern || ''}
+                            placeholder="^[A-Z]{2}\d{4}$"
+                            description="A regular expression. Leave blank for no pattern check."
+                            onChange={(_e, v) => set({ pattern: v })}
+                          />
+                          <TextField
+                            label="Message when the pattern doesn't match"
+                            value={field.patternMessage || ''}
+                            placeholder="This answer is not in the expected format"
+                            disabled={!field.pattern}
+                            onChange={(_e, v) => set({ patternMessage: v })}
+                          />
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              </PivotItem>
+            </Pivot>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
 
-            {/* ----- Per-type options ----- */}
-            <h4 className={styles.panelSectionTitle}>Options</h4>
-
+  /** The per-type "Options" tab: the long tail of field-specific settings. */
+  function renderOptionsTab(): React.ReactNode {
+    return (
+      <>
             {isNumeric && (
               <>
                 <Dropdown
@@ -921,9 +943,7 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                 are locked — duplicate the question if you need a different type.
               </p>
             )}
-          </>
-        )}
-      </div>
-    </Panel>
-  );
+      </>
+    );
+  }
 };

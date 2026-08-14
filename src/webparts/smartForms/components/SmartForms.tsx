@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { IReadonlyTheme } from '@microsoft/sp-component-base';
+import type { IReadonlyTheme } from '@microsoft/sp-component-base';
 import {
   DefaultButton,
   Dialog,
@@ -8,6 +8,7 @@ import {
   Icon,
   IconButton,
   MessageBar,
+  MessageBarButton,
   MessageBarType,
   PrimaryButton,
   Spinner,
@@ -43,6 +44,8 @@ import { ResponsesView } from './responses/ResponsesView';
 export interface ISmartFormsProps {
   listId: string;
   formDefinitionJson: string;
+  /** stable per web part instance; used as the key for the durable, page-independent definition store */
+  instanceId: string;
   spService: SharePointService;
   isEditMode: boolean;
   /** the site theme, so the form can render legibly on a dark page */
@@ -150,8 +153,8 @@ export const SmartForms: React.FunctionComponent<ISmartFormsProps> = (props) => 
   const [linkCopied, setLinkCopied] = React.useState<boolean>(false);
   const [preflightOpen, setPreflightOpen] = React.useState<boolean>(false);
   const [focusFieldId, setFocusFieldId] = React.useState<string | undefined>(undefined);
-  // 'clean' once the page has been saved with the current definition
-  const [saveState, setSaveState] = React.useState<'clean' | 'pending' | 'captured'>('clean');
+  // 'clean' once the definition has been saved to SharePoint (independent of page save)
+  const [saveState, setSaveState] = React.useState<'clean' | 'saving' | 'error'>('clean');
 
   const fillView = React.useMemo(isFillView, []);
 
@@ -163,24 +166,39 @@ export const SmartForms: React.FunctionComponent<ISmartFormsProps> = (props) => 
   const issues = React.useMemo(() => validateDefinition(definition), [definition]);
   const blockingIssues = issues.filter((issue) => issue.severity === 'error');
 
-  // ----- auto-save: edits persist to web part properties, debounced -----
+  // ----- auto-save: edits persist straight to SharePoint, debounced, independent of page save -----
   const pendingJson = React.useRef<string | undefined>(undefined);
   const saveTimer = React.useRef<number | undefined>(undefined);
+  // only the most recently issued save is allowed to move the chip out of 'saving',
+  // so a slow earlier request can't clobber the state after a faster later one lands
+  const saveSeq = React.useRef(0);
 
   const persist = (updated: IFormDefinition, immediate?: boolean): void => {
     setDefinition(updated);
     const json = JSON.stringify(updated);
     pendingJson.current = json;
-    setSaveState('pending');
+    setSaveState('saving');
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
     }
     const flush = (): void => {
       pendingJson.current = undefined;
+      // lightweight mirror on the page property; not required for durability
       props.onFormDefinitionChange(json);
-      // "captured" not "saved": SPFx only writes properties to the page when the
-      // author saves or publishes it, so the work is only safe once they do
-      setSaveState('captured');
+      const seq = ++saveSeq.current;
+      spService
+        .saveFormDefinition(props.instanceId, json)
+        .then(() => {
+          if (saveSeq.current === seq) {
+            setSaveState('clean');
+          }
+        })
+        .catch((error) => {
+          logError('saveFormDefinition', error);
+          if (saveSeq.current === seq) {
+            setSaveState('error');
+          }
+        });
     };
     if (immediate) {
       flush();
@@ -197,17 +215,45 @@ export const SmartForms: React.FunctionComponent<ISmartFormsProps> = (props) => 
       }
       if (pendingJson.current) {
         props.onFormDefinitionChange(pendingJson.current);
+        void spService.saveFormDefinition(props.instanceId, pendingJson.current);
       }
     },
     []
   );
 
+  // hydrate from the durable store once on mount; it's the source of truth once
+  // anything has been saved through it. A page property with no matching durable
+  // record means the form predates this store (or was never saved) — migrate it.
   React.useEffect(() => {
-    const parsed = parseFormDefinition(formDefinitionJson) || createEmptyFormDefinition();
-    setDefinition(parsed);
-    // the prop only changes when the host re-renders with saved properties
-    setSaveState('clean');
-  }, [formDefinitionJson]);
+    let cancelled = false;
+    debugLog('hydrating form definition', { instanceId: props.instanceId });
+    spService
+      .loadFormDefinition(props.instanceId)
+      .then((stored) => {
+        if (cancelled) {
+          return;
+        }
+        debugLog('hydration result', { instanceId: props.instanceId, found: !!stored });
+        if (stored) {
+          const parsed = parseFormDefinition(stored);
+          if (parsed) {
+            setDefinition(parsed);
+          }
+        } else if (formDefinitionJson) {
+          void spService.saveFormDefinition(props.instanceId, formDefinitionJson);
+        }
+      })
+      .catch((error) => {
+        // the initial paint from the page property already covers this case, but
+        // log it so a silent read failure doesn't look like "the data disappeared"
+        logError('loadFormDefinition', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // instanceId is stable for the lifetime of this web part instance
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -289,7 +335,8 @@ export const SmartForms: React.FunctionComponent<ISmartFormsProps> = (props) => 
     } catch (error) {
       logError('ensureFields (Collect responses)', error);
       setPublishError(
-        'The list columns could not be created. Check that you have Manage Lists permission on the response list and try again.'
+        'The list columns could not be created. This usually means you don\'t have Manage Lists permission on the response list, ' +
+          'but it can also happen on sites with custom scripting disabled. Check the browser console for the underlying error, or try again.'
       );
     }
     setPublishing(false);
@@ -435,7 +482,7 @@ export const SmartForms: React.FunctionComponent<ISmartFormsProps> = (props) => 
         </div>
 
         <div className={styles.ownerBarRight}>
-          {renderSaveChip(saveState, props.isEditMode)}
+          {renderSaveChip(saveState)}
           <IconButton
             iconProps={{ iconName: 'Lightbulb' }}
             title="Start from a template"
@@ -463,24 +510,17 @@ export const SmartForms: React.FunctionComponent<ISmartFormsProps> = (props) => 
         </div>
       </div>
 
-      {/*
-        The single most important message in the app. SPFx keeps web part
-        properties in memory until the author saves the page, so an owner who
-        builds a form, publishes its columns and navigates away loses the whole
-        definition while the orphaned columns remain.
-      */}
-      {props.isEditMode && saveState !== 'clean' && (
-        <MessageBar messageBarType={MessageBarType.warning} className={styles.publishBanner}>
-          Your changes are held on this page but not stored yet —{' '}
-          <strong>save or publish the page</strong> to keep them. Closing the page first will discard
-          the form.
-        </MessageBar>
-      )}
-
-      {!props.isEditMode && saveState === 'captured' && (
-        <MessageBar messageBarType={MessageBarType.severeWarning} className={styles.publishBanner}>
-          You are viewing this page rather than editing it, so changes to the form cannot be saved.
-          Choose <strong>Edit</strong> on the page, then make your changes.
+      {saveState === 'error' && (
+        <MessageBar
+          messageBarType={MessageBarType.error}
+          className={styles.publishBanner}
+          actions={
+            <div>
+              <MessageBarButton onClick={() => persist(definition, true)}>Retry</MessageBarButton>
+            </div>
+          }
+        >
+          Your last change could not be saved. Check your connection, then try again.
         </MessageBar>
       )}
 
@@ -721,35 +761,28 @@ export const SmartForms: React.FunctionComponent<ISmartFormsProps> = (props) => 
   );
 };
 
-/** Save-state chip. Wording matters: "captured" is not "saved". */
-const renderSaveChip = (
-  state: 'clean' | 'pending' | 'captured',
-  isEditMode: boolean
-): React.ReactNode => {
-  if (state === 'clean') {
+/** Save-state chip — reflects whether the definition is durably saved to SharePoint. */
+const renderSaveChip = (state: 'clean' | 'saving' | 'error'): React.ReactNode => {
+  if (state === 'saving') {
     return (
-      <span className={styles.saveChipSaved} title="This form matches what is saved on the page">
-        <Icon iconName="CheckMark" /> Saved
-      </span>
-    );
-  }
-  if (state === 'pending') {
-    return (
-      <span className={styles.saveChipPending} title="Capturing your latest edit">
+      <span className={styles.saveChipPending} title="Saving your latest edit">
         <Icon iconName="Sync" /> Saving…
       </span>
     );
   }
+  if (state === 'error') {
+    return (
+      <span
+        className={styles.saveChipUnpublished}
+        title="Your last edit could not be saved. Check your connection and try again."
+      >
+        <Icon iconName="Warning" /> Save failed
+      </span>
+    );
+  }
   return (
-    <span
-      className={styles.saveChipUnpublished}
-      title={
-        isEditMode
-          ? 'Your edits are on the page but not stored. Save or publish the page to keep them.'
-          : 'Edits cannot be stored while you are only viewing the page.'
-      }
-    >
-      <Icon iconName="Warning" /> Publish the page
+    <span className={styles.saveChipSaved} title="All changes are saved">
+      <Icon iconName="CheckMark" /> Saved
     </span>
   );
 };

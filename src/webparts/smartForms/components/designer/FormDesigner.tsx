@@ -189,15 +189,25 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
     });
   };
 
-  const applyPreset = (sectionId: string, presetKey: string): void => {
+  const applyPreset = (sectionId: string, presetKey: string, atIndex?: number): void => {
     const preset = FIELD_PRESETS.filter((p) => p.key === presetKey)[0];
     if (!preset) {
       return;
     }
-    addField(sectionId, preset.type, preset.defaults);
+    addField(sectionId, preset.type, preset.defaults, atIndex);
   };
 
-  const addField = (sectionId: string, type: FieldType, extraDefaults?: Partial<IFormField>): void => {
+  /**
+   * Add a new question to a section. Omit `atIndex` to append at the end (the
+   * "Add new" button); pass `fieldIndex + 1` to insert right after an existing
+   * question (the per-question "Insert question below" menu item).
+   */
+  const addField = (
+    sectionId: string,
+    type: FieldType,
+    extraDefaults?: Partial<IFormField>,
+    atIndex?: number
+  ): void => {
     const id = newId();
     update((next) => {
       const target = next.sections.filter((s) => s.id === sectionId)[0];
@@ -217,7 +227,11 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
         ...defaultsForType(type),
         ...(extraDefaults || {})
       };
-      target.fields.push(field);
+      if (atIndex === undefined || atIndex >= target.fields.length) {
+        target.fields.push(field);
+      } else {
+        target.fields.splice(Math.max(0, atIndex), 0, field);
+      }
     });
     setActiveFieldId(id);
   };
@@ -403,13 +417,14 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
 
   // ----- menus -----
 
-  const addMenu = (section: IFormSection): IContextualMenuProps => {
+  /** Builds the question-type picker. Pass `atIndex` to insert mid-section instead of appending. */
+  const addMenu = (section: IFormSection, atIndex?: number): IContextualMenuProps => {
     const item = (meta: IFieldTypeMeta): IContextualMenuItem => ({
       key: meta.type,
       text: meta.label,
       iconProps: { iconName: meta.icon },
       secondaryText: meta.description,
-      onClick: () => addField(section.id, meta.type)
+      onClick: () => addField(section.id, meta.type, undefined, atIndex)
     });
 
     const popular = POPULAR_TYPES.map((t) => item(getFieldTypeMeta(t)));
@@ -419,7 +434,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
       text: preset.label,
       iconProps: { iconName: preset.icon },
       secondaryText: preset.description,
-      onClick: () => applyPreset(section.id, preset.key)
+      onClick: () => applyPreset(section.id, preset.key, atIndex)
     }));
 
     const byCategory: IContextualMenuItem[] = [];
@@ -455,7 +470,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
     };
   };
 
-  const overflowMenu = (field: IFormField): IContextualMenuProps => ({
+  const overflowMenu = (section: IFormSection, field: IFormField, fieldIndex: number): IContextualMenuProps => ({
     items: [
       {
         key: 'type',
@@ -494,17 +509,16 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
       },
       { key: 'div', itemType: 0 },
       {
+        key: 'insert-below',
+        text: 'Insert question below',
+        iconProps: { iconName: 'Add' },
+        subMenuProps: addMenu(section, fieldIndex + 1)
+      },
+      {
         key: 'duplicate',
         text: 'Duplicate',
         iconProps: { iconName: 'Copy' },
-        onClick: () => {
-          const section = definition.sections.filter(
-            (s) => s.fields.filter((f) => f.id === field.id).length > 0
-          )[0];
-          if (section) {
-            duplicateField(section, field);
-          }
-        }
+        onClick: () => duplicateField(section, field)
       },
       {
         key: 'delete',
@@ -968,7 +982,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
             iconProps={{ iconName: 'MoreVertical' }}
             title="More options"
             ariaLabel="More options for this question"
-            menuProps={overflowMenu(field)}
+            menuProps={overflowMenu(section, field, fieldIndex)}
             onRenderMenuIcon={() => null}
           />
         </div>

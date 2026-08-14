@@ -1,4 +1,4 @@
-import { IReadonlyTheme } from '@microsoft/sp-component-base';
+import type { IReadonlyTheme } from '@microsoft/sp-component-base';
 
 /**
  * Theme plumbing.

@@ -406,7 +406,7 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
         setDraftId(draft.id);
         setValues((prev) => applyCalculatedFields(definition, { ...prev, ...draft.values }));
       })
-      .catch(() => undefined);
+      .catch((): undefined => undefined);
     return () => {
       cancelled = true;
     };

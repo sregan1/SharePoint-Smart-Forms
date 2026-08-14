@@ -634,6 +634,13 @@
   padding-bottom: $space-4;
 }
 
+.panelTabContent {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+  padding-top: $space-3;
+}
+
 .panelSectionTitle {
   margin: $space-3 0 0;
   font-size: $text-base;
