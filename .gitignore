@@ -45,5 +45,6 @@ config/serve.json
 
 # Editor settings
 .vscode/settings.json
+.claude/settings.json
 
 .npmignore
