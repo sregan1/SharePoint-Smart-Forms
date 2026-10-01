@@ -16,6 +16,7 @@ import {
   IFormField,
   IFormSection,
   IFormValues,
+  IMessageBag,
   isInputType
 } from '../../models';
 import {
@@ -23,14 +24,18 @@ import {
   buildNumberMap,
   formAvailability,
   formatValue,
+  computeVisibility,
+  effectiveChoices,
   IAvailability,
   inputFields,
-  isFieldVisible,
-  isSectionVisible,
+  parseLocalDate,
+  parseTimeToMinutes,
   shuffleWithSeed,
   validateField
 } from '../../utils/formUtils';
-import { SharePointService } from '../../services/SharePointService';
+import { IDraft, ISubmitResult, SharePointService } from '../../services/SharePointService';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString, isRtlLocale } from '../../utils/localeUtils';
 import { logError } from '../../utils/debug';
 import { FieldControl } from './FieldControl';
 import { ContentBlock } from './ContentBlock';
@@ -43,15 +48,71 @@ export interface IFormRendererProps {
   spService: SharePointService;
   /** 'preview' validates and shows the confirmation without writing anything */
   mode?: RendererMode;
+  /** page UI culture (e.g. 'ar-SA'); drives right-to-left layout and date formatting */
+  locale?: string;
   /** notified after a real submission, so the shell can refresh counts */
   onSubmitted?: () => void;
 }
+
+const messageBag = strings as unknown as IMessageBag;
+
+/** Today's date at the given minutes-past-midnight, as the Time control expects. */
+const dateAtMinutes = (minutes: number): Date => {
+  const d = new Date();
+  d.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+  return d;
+};
+
+/** Convert raw text (query string or default) into a Date/Time answer, or undefined. */
+const parseDateOrTime = (field: IFormField, raw: string): Date | undefined => {
+  if (field.type === FieldType.Time) {
+    if (/^now$/i.test(raw.trim())) {
+      return new Date();
+    }
+    const minutes = parseTimeToMinutes(raw);
+    return minutes === undefined ? undefined : dateAtMinutes(minutes);
+  }
+  return parseLocalDate(raw);
+};
+
+/** Options a text answer may be chosen from, or undefined when they can't be known statically. */
+const knownOptions = (field: IFormField): string[] | undefined => {
+  if (field.type === FieldType.Choice) {
+    return effectiveChoices(field);
+  }
+  if (field.type === FieldType.ImageChoice) {
+    return (field.imageChoices || []).map((c) => c.label);
+  }
+  // Lookup options load from another list at runtime, so they can't be checked here
+  return undefined;
+};
+
+/** Keep only the parts of `raw` (';'-separated when multi) that match a real option, case-insensitively. */
+const choiceFromText = (field: IFormField, raw: string): string | string[] | undefined => {
+  const parts = field.allowMultiple
+    ? raw.split(';').map((s) => s.trim()).filter((s) => s.length > 0)
+    : [raw.trim()];
+  const options = knownOptions(field);
+  const kept = options
+    ? parts
+        .map((p) => options.filter((o) => o.toLowerCase() === p.toLowerCase())[0])
+        .filter((o) => o !== undefined)
+    : parts;
+  if (kept.length === 0) {
+    return undefined;
+  }
+  return field.allowMultiple ? kept : kept[0];
+};
 
 /**
  * Prefill values from the page's query string: any parameter named after a
  * question's internal column name (e.g. ?SFYourName=Alex) becomes that
  * question's initial answer. Lets owners hand out links that pre-answer
  * routing questions — something Microsoft Forms can't do.
+ *
+ * Security note: this is a convenience, not a security boundary. Anyone can
+ * edit the URL or the answer afterwards, so never rely on a prefilled (or
+ * read-only-looking) value being trustworthy; validate on the consuming side.
  */
 const applyPrefillFromUrl = (definition: IFormDefinition, values: IFormValues): void => {
   let params: URLSearchParams;
@@ -82,15 +143,17 @@ const applyPrefillFromUrl = (definition: IFormDefinition, values: IFormValues): 
         break;
       case FieldType.Choice:
       case FieldType.Lookup:
-      case FieldType.ImageChoice:
-        values[field.id] = field.allowMultiple
-          ? raw.split(';').map((s) => s.trim()).filter((s) => s.length > 0)
-          : raw;
+      case FieldType.ImageChoice: {
+        const chosen = choiceFromText(field, raw);
+        if (chosen !== undefined) {
+          values[field.id] = chosen;
+        }
         break;
+      }
       case FieldType.Date:
       case FieldType.Time: {
-        const parsed = /^today$/i.test(raw) ? new Date() : new Date(raw);
-        if (!isNaN(parsed.getTime())) {
+        const parsed = parseDateOrTime(field, raw);
+        if (parsed) {
           values[field.id] = parsed;
         }
         break;
@@ -147,17 +210,20 @@ const buildDefaultValues = (definition: IFormDefinition): IFormValues => {
       case FieldType.Choice:
       case FieldType.Lookup:
       case FieldType.ImageChoice:
-        values[field.id] = field.allowMultiple
-          ? field.defaultValue.split(';').map((s) => s.trim()).filter((s) => s.length > 0)
-          : field.defaultValue;
+        {
+          const chosen = choiceFromText(field, field.defaultValue);
+          if (chosen !== undefined) {
+            values[field.id] = chosen;
+          }
+        }
         break;
       case FieldType.Date:
       case FieldType.Time:
-        if (/^today$|^now$/i.test(field.defaultValue)) {
+        if (/^now$/i.test(field.defaultValue.trim())) {
           values[field.id] = new Date();
         } else {
-          const parsed = new Date(field.defaultValue);
-          if (!isNaN(parsed.getTime())) {
+          const parsed = parseDateOrTime(field, field.defaultValue);
+          if (parsed) {
             values[field.id] = parsed;
           }
         }
@@ -193,6 +259,21 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
   const [checkingAccess, setCheckingAccess] = React.useState<boolean>(false);
   const [draftId, setDraftId] = React.useState<number | undefined>(undefined);
   const [draftState, setDraftState] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // the form is held back until any saved draft has been restored, so a late
+  // draft can never overwrite what the respondent has already typed
+  const [draftLoading, setDraftLoading] = React.useState<boolean>(!isPreview && settings.allowSaveDraft === true);
+  // file/signature questions whose stored file couldn't be restored (id + title)
+  const [missing, setMissing] = React.useState<{ ids: string[]; titles: string[] }>({ ids: [], titles: [] });
+  const [failedAttachments, setFailedAttachments] = React.useState<string[]>([]);
+  // edit-my-response
+  const [myResponseId, setMyResponseId] = React.useState<number | undefined>(undefined);
+  const [checkingEdit, setCheckingEdit] = React.useState<boolean>(!isPreview && settings.allowEdit === true);
+  const [editingId, setEditingId] = React.useState<number | undefined>(undefined);
+  const [loadingEdit, setLoadingEdit] = React.useState<boolean>(false);
+  const [updated, setUpdated] = React.useState<boolean>(false);
+  const submitGuard = React.useRef<boolean>(false);
+  const saveGuard = React.useRef<boolean>(false);
+  const locale = props.locale;
 
   // how long the response took, for the dashboard's completion-time stat
   const startedAt = React.useRef<number>(Date.now());
@@ -225,7 +306,9 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
         if (cancelled) {
           return;
         }
-        setAvailability(formAvailability(definition, { responseCount, alreadyAnswered }));
+        setAvailability(
+          formAvailability(definition, { responseCount, alreadyAnswered, messages: messageBag, locale: props.locale })
+        );
         setCheckingAccess(false);
       })
       .catch(() => {
@@ -233,7 +316,7 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
           return;
         }
         // a failed check must not lock people out of an otherwise open form
-        setAvailability(formAvailability(definition, {}));
+        setAvailability(formAvailability(definition, { messages: messageBag, locale: props.locale }));
         setCheckingAccess(false);
       });
     return () => {
@@ -243,22 +326,22 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
 
   // ----- section / field visibility -----
 
+  // one dependency-ordered pass, so hidden drivers behave identically everywhere
+  const visibility = React.useMemo(() => computeVisibility(definition, values), [definition, values]);
+
   const visibleSections = React.useMemo(() => {
-    return (definition.sections || []).filter((section) => {
-      if (!isSectionVisible(section, definition, values)) {
-        return false;
-      }
-      // a section whose every field is branched away would otherwise render as a
-      // blank wizard step with nothing but a Next button
-      return section.fields.filter((f) => isFieldVisible(f, definition, values)).length > 0;
-    });
-  }, [definition, values]);
+    // a field's visibility already folds in its section's rule; a section whose
+    // every field is branched away would otherwise render as a blank wizard step
+    return (definition.sections || []).filter(
+      (section) => section.fields.filter((f) => visibility[f.id] !== false).length > 0
+    );
+  }, [definition, visibility]);
 
   const isWizard = settings.layout === 'wizard' && visibleSections.length > 1;
 
   const orderedFieldsOf = React.useCallback(
     (section: IFormSection): IFormField[] => {
-      const visible = section.fields.filter((f) => isFieldVisible(f, definition, values));
+      const visible = section.fields.filter((f) => visibility[f.id] !== false);
       if (!settings.shuffleQuestions) {
         return visible;
       }
@@ -269,7 +352,7 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
       let next = 0;
       return visible.map((field) => (isInputType(field.type) ? shuffled[next++] : field));
     },
-    [definition, values, settings.shuffleQuestions]
+    [visibility, settings.shuffleQuestions]
   );
 
   /** Every visible field across every visible section, in display order. */
@@ -289,6 +372,14 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
       // recompute totals immediately so a Calculated field tracks as you type
       return applyCalculatedFields(definition, next);
     });
+    setMissing((prev) =>
+      prev.ids.indexOf(field.id) === -1
+        ? prev
+        : {
+            ids: prev.ids.filter((id) => id !== field.id),
+            titles: prev.titles.filter((_t, i) => prev.ids[i] !== field.id)
+          }
+    );
     setErrors((prev) => {
       if (!prev[field.id]) {
         return prev;
@@ -306,7 +397,7 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
         if (!isInputType(field.type)) {
           return;
         }
-        const error = validateField(field, values[field.id]);
+        const error = validateField(field, values[field.id], messageBag);
         if (error) {
           nextErrors[field.id] = error;
         }
@@ -340,7 +431,26 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
 
   // ----- submit / draft -----
 
+  /** Apply a restored draft/response; file questions that couldn't be restored must be re-attached. */
+  const applyRestored = (restored: IDraft, base: IFormValues): IFormValues => {
+    const next: IFormValues = { ...base, ...restored.values };
+    const ids = restored.missingFileFieldIds || [];
+    ids.forEach((id) => {
+      const field = inputFields(definition).filter((f) => f.id === id)[0];
+      // a required question with only some files back would pass validation
+      // while silently dropping the rest, so make the respondent redo it
+      if (field && field.required) {
+        delete next[id];
+      }
+    });
+    setMissing({ ids: ids.slice(), titles: (restored.missingFiles || []).slice() });
+    return applyCalculatedFields(definition, next);
+  };
+
   const handleSubmit = async (): Promise<void> => {
+    if (submitGuard.current || draftLoading || loadingEdit) {
+      return;
+    }
     if (!validateSections(visibleSections)) {
       return;
     }
@@ -349,29 +459,39 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
       setSubmitted(true);
       return;
     }
+    submitGuard.current = true;
     setSubmitting(true);
     setSubmitError('');
     try {
-      const durationSeconds = Math.max(1, Math.round((Date.now() - startedAt.current) / 1000));
-      const itemId = await spService.submitResponse(listId, definition, values, {
-        durationSeconds,
-        replaceItemId: draftId
-      });
-      // fire-and-forget: notification emails never block or fail the submission,
-      // but a failure is still worth a trace when someone is troubleshooting
-      void spService
-        .sendResponseNotifications(listId, definition, values, itemId)
-        .catch((error) => logError('sendResponseNotifications', error));
+      let result: ISubmitResult;
+      if (editingId !== undefined) {
+        result = await spService.updateResponse(listId, definition, editingId, values, settings.allowEdit === true, {
+          locale: locale
+        });
+        setUpdated(true);
+      } else {
+        const durationSeconds = Math.max(1, Math.round((Date.now() - startedAt.current) / 1000));
+        result = await spService.submitResponseDetailed(listId, definition, values, {
+          durationSeconds,
+          replaceItemId: draftId,
+          locale: locale
+        });
+        // fire-and-forget: notification emails never block or fail the submission,
+        // but a failure is still worth a trace when someone is troubleshooting
+        void spService
+          .sendResponseNotifications(listId, definition, values, result.id)
+          .catch((error) => logError('sendResponseNotifications', error));
+      }
+      setFailedAttachments(result.failedAttachments || []);
       setSubmitted(true);
       if (props.onSubmitted) {
         props.onSubmitted();
       }
     } catch (error) {
       logError('submitResponse', error);
-      setSubmitError(
-        'Your response could not be saved. Make sure the form has been published from the designer and that you have permission to add items to the response list.'
-      );
+      setSubmitError(strings.Form_Submit_SaveError);
     }
+    submitGuard.current = false;
     setSubmitting(false);
   };
 
@@ -380,37 +500,111 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
       setDraftState('saved');
       return;
     }
+    if (saveGuard.current || submitGuard.current || draftLoading) {
+      return;
+    }
+    saveGuard.current = true;
     setDraftState('saving');
+    setFailedAttachments([]);
     try {
-      const id = await spService.saveDraft(listId, definition, values, draftId);
-      setDraftId(id);
+      const result = await spService.saveDraftDetailed(listId, definition, values, draftId, locale);
+      setDraftId(result.id);
+      setFailedAttachments(result.failedAttachments || []);
       setDraftState('saved');
     } catch (error) {
       logError('saveDraft', error);
       setDraftState('error');
     }
+    saveGuard.current = false;
   };
 
-  // resume an existing draft for this respondent
+  // resume an existing draft for this respondent; the form stays blocked until
+  // this settles, so restoring can never clobber anything the user typed
   React.useEffect(() => {
     let cancelled = false;
     if (isPreview || settings.allowSaveDraft !== true) {
+      setDraftLoading(false);
       return undefined;
     }
+    setDraftLoading(true);
     spService
       .loadDraft(listId, definition)
       .then((draft) => {
-        if (cancelled || !draft) {
+        if (cancelled) {
           return;
         }
-        setDraftId(draft.id);
-        setValues((prev) => applyCalculatedFields(definition, { ...prev, ...draft.values }));
+        if (draft) {
+          setDraftId(draft.id);
+          setValues((prev) => applyRestored(draft, prev));
+        }
+        setDraftLoading(false);
       })
-      .catch((): undefined => undefined);
+      .catch((error) => {
+        logError('loadDraft', error);
+        if (!cancelled) {
+          setDraftLoading(false);
+        }
+      });
     return () => {
       cancelled = true;
     };
   }, [listId, isPreview, settings.allowSaveDraft]);
+
+  // does this respondent have a completed response they may edit?
+  React.useEffect(() => {
+    let cancelled = false;
+    if (isPreview || settings.allowEdit !== true) {
+      setMyResponseId(undefined);
+      setCheckingEdit(false);
+      return undefined;
+    }
+    setCheckingEdit(true);
+    spService
+      .getMyResponses(listId, definition, 1)
+      .then((mine) => {
+        if (!cancelled) {
+          setMyResponseId(mine.length > 0 ? mine[0].id : undefined);
+          setCheckingEdit(false);
+        }
+      })
+      .catch((error) => {
+        logError('getMyResponses', error);
+        if (!cancelled) {
+          setCheckingEdit(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listId, isPreview, settings.allowEdit]);
+
+  const startEdit = (): void => {
+    if (myResponseId === undefined || loadingEdit) {
+      return;
+    }
+    setLoadingEdit(true);
+    setSubmitError('');
+    spService
+      .loadResponseForEdit(listId, definition, myResponseId)
+      .then((existing) => {
+        if (!existing) {
+          setSubmitError(strings.Form_Edit_LoadError);
+          setLoadingEdit(false);
+          return;
+        }
+        setValues(applyRestored(existing, buildDefaultValues(definition)));
+        setEditingId(existing.id);
+        setErrors({});
+        setStep(0);
+        setShowErrorSummary(false);
+        setLoadingEdit(false);
+      })
+      .catch((error) => {
+        logError('loadResponseForEdit', error);
+        setSubmitError(strings.Form_Edit_LoadError);
+        setLoadingEdit(false);
+      });
+  };
 
   const handleReset = (): void => {
     setValues(buildDefaultValues(definition));
@@ -421,6 +615,10 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
     setShowErrorSummary(false);
     setDraftId(undefined);
     setDraftState('idle');
+    setMissing({ ids: [], titles: [] });
+    setFailedAttachments([]);
+    setEditingId(undefined);
+    setUpdated(false);
     startedAt.current = Date.now();
     shuffleSeed.current = Math.floor(Math.random() * 0x7fffffff);
   };
@@ -434,23 +632,28 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
       <div className={styles.formCard}>
         <div className={styles.emptyForm}>
           <Icon iconName="PageEdit" className={styles.emptyFormIcon} />
-          <p>This form doesn&apos;t have any questions yet. The form owner can add them in the Questions tab.</p>
+          <p>{strings.Form_Empty_Message}</p>
         </div>
       </div>
     );
   }
 
-  if (checkingAccess) {
+  if (checkingAccess || checkingEdit || draftLoading || loadingEdit) {
     return (
       <div className={styles.formCard}>
         <div className={styles.emptyForm}>
-          <Spinner size={SpinnerSize.large} label="Checking the form…" />
+          <Spinner size={SpinnerSize.large} label={strings.Form_Checking} />
         </div>
       </div>
     );
   }
 
-  if (availability && availability.state !== 'open') {
+  // editing your own response is exempt from the response cap and one-per-person rule
+  if (availability && availability.state !== 'open' && editingId === undefined) {
+    const canEdit =
+      myResponseId !== undefined &&
+      settings.allowEdit === true &&
+      (availability.state === 'alreadyAnswered' || availability.state === 'full');
     const icon = availability.state === 'notYetOpen' ? 'Clock' : availability.state === 'alreadyAnswered' ? 'CheckMark' : 'Lock';
     return (
       <div className={styles.formCard}>
@@ -458,8 +661,15 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
           <div className={styles.closedIcon}>
             <Icon iconName={icon} />
           </div>
-          <h2>{availability.state === 'notYetOpen' ? 'Not open yet' : availability.state === 'alreadyAnswered' ? 'Already answered' : 'Form closed'}</h2>
+          <h2>{availability.state === 'notYetOpen'
+              ? strings.Form_Closed_NotYetOpen
+              : availability.state === 'alreadyAnswered'
+                ? strings.Form_Closed_AlreadyAnswered
+                : strings.Form_Closed_Title}</h2>
           <p>{availability.message}</p>
+          {canEdit && (
+            <DefaultButton iconProps={{ iconName: 'Edit' }} text={strings.Form_Edit_Button} onClick={startEdit} />
+          )}
         </div>
       </div>
     );
@@ -472,18 +682,23 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
           <div className={styles.confirmationIcon}>
             <Icon iconName="CheckMark" />
           </div>
-          <h2>{settings.confirmationTitle}</h2>
-          <p>{settings.confirmationMessage}</p>
+          <h2>{updated ? strings.Form_Edit_UpdatedTitle : settings.confirmationTitle}</h2>
+          <p>{updated ? strings.Form_Edit_UpdatedMessage : settings.confirmationMessage}</p>
+          {failedAttachments.length > 0 && (
+            <MessageBar messageBarType={MessageBarType.warning} styles={{ root: { marginBottom: 16 } }}>
+              {formatString(strings.Form_Attachments_Failed, { names: failedAttachments.join(', ') })}
+            </MessageBar>
+          )}
           {isPreview && (
             <MessageBar messageBarType={MessageBarType.info} styles={{ root: { marginBottom: 16 } }}>
-              This was a preview — nothing was saved to the response list.
+              {strings.Form_Confirmation_PreviewNotice}
             </MessageBar>
           )}
           <div className={styles.confirmationActions}>
-            {(settings.allowAnotherResponse || isPreview) && (
+            {((settings.allowAnotherResponse && !updated) || isPreview) && (
               <DefaultButton
                 iconProps={{ iconName: 'Refresh' }}
-                text={isPreview ? 'Preview again' : 'Submit another response'}
+                text={isPreview ? strings.Form_Confirmation_PreviewAgain : strings.Form_Confirmation_SubmitAnother}
                 onClick={handleReset}
               />
             )}
@@ -544,7 +759,7 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
                 *
               </span>
             )}
-            {field.required && <span className={styles.hiddenInput}>(required)</span>}
+            {field.required && <span className={styles.hiddenInput}>{strings.Form_Field_RequiredAria}</span>}
           </span>
           {field.description && (
             <div className={styles.fieldDescription} id={helpId}>
@@ -611,8 +826,10 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
     field: visibleOrdered.filter((f) => f.id === fieldId)[0]
   }));
 
+  const rtl = isRtlLocale(locale);
+
   return (
-    <div className={styles.formCard}>
+    <div className={styles.formCard} dir={rtl ? 'rtl' : undefined}>
       {settings.showFormHeader && (
         <div className={styles.formHeader}>
           <div className={styles.formHeaderIcon}>
@@ -627,7 +844,7 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
 
       {isWizard && (
         <div className={styles.wizardHeader}>
-          <div className={styles.stepDots} role="list" aria-label="Form steps">
+          <div className={styles.stepDots} role="list" aria-label={strings.Form_Wizard_StepsAria}>
             {visibleSections.map((section, index) => {
               const state =
                 index === currentStep ? styles.stepDotActive : index < currentStep ? styles.stepDotDone : styles.stepDot;
@@ -648,14 +865,14 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
                   >
                     {index < currentStep ? '✓' : index + 1}
                   </span>
-                  {section.title || 'Step ' + (index + 1)}
+                  {section.title || formatString(strings.Form_Wizard_StepFallback, { step: index + 1 })}
                 </button>
               );
             })}
           </div>
           {settings.showProgressBar && (
             <ProgressIndicator
-              ariaValueText={'Step ' + (currentStep + 1) + ' of ' + visibleSections.length}
+              ariaValueText={formatString(strings.Form_Wizard_StepOf, { step: currentStep + 1, total: visibleSections.length })}
               percentComplete={(currentStep + 1) / visibleSections.length}
             />
           )}
@@ -674,7 +891,7 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
           messageBarType={MessageBarType.error}
           onDismiss={() => setShowErrorSummary(false)}
         >
-          Please check {errorEntries.length} answers:
+          {formatString(strings.Form_ErrorSummary_Title, { count: errorEntries.length })}
           <ul className={styles.errorSummaryList}>
             {errorEntries.map((entry) => (
               <li key={entry.fieldId}>
@@ -683,12 +900,43 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
                   className={styles.errorSummaryLink}
                   onClick={() => focusField(entry.fieldId)}
                 >
-                  {entry.field ? entry.field.title || 'Untitled question' : 'Question'}
+                  {entry.field ? entry.field.title || strings.Form_ErrorSummary_UntitledQuestion : strings.Form_ErrorSummary_Question}
                 </button>
-                {' — ' + entry.message}
+                {formatString(strings.Form_ErrorSummary_Detail, { message: entry.message })}
               </li>
             ))}
           </ul>
+        </MessageBar>
+      )}
+
+      {editingId !== undefined ? (
+        <MessageBar messageBarType={MessageBarType.info} styles={{ root: { marginBottom: 12 } }}>
+          {strings.Form_Edit_Banner}
+        </MessageBar>
+      ) : (
+        myResponseId !== undefined &&
+        settings.allowEdit === true && (
+          <MessageBar
+            messageBarType={MessageBarType.info}
+            styles={{ root: { marginBottom: 12 } }}
+            actions={
+              <DefaultButton iconProps={{ iconName: 'Edit' }} text={strings.Form_Edit_Button} onClick={startEdit} />
+            }
+          >
+            {strings.Form_Edit_Available}
+          </MessageBar>
+        )
+      )}
+
+      {missing.titles.length > 0 && (
+        <MessageBar messageBarType={MessageBarType.warning} styles={{ root: { marginBottom: 12 } }} role="status">
+          {formatString(strings.Form_Draft_MissingFiles, { names: missing.titles.join(', ') })}
+        </MessageBar>
+      )}
+
+      {failedAttachments.length > 0 && draftState === 'saved' && (
+        <MessageBar messageBarType={MessageBarType.warning} styles={{ root: { marginBottom: 12 } }} role="alert">
+          {formatString(strings.Form_Attachments_Failed, { names: failedAttachments.join(', ') })}
         </MessageBar>
       )}
 
@@ -706,7 +954,7 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
         {isWizard && currentStep > 0 && (
           <DefaultButton
             iconProps={{ iconName: 'ChevronLeft' }}
-            text="Back"
+            text={strings.Form_Nav_Back}
             disabled={submitting}
             onClick={goBack}
           />
@@ -717,12 +965,12 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
             iconProps={{ iconName: draftState === 'saved' ? 'CheckMark' : 'Save' }}
             text={
               draftState === 'saving'
-                ? 'Saving…'
+                ? strings.Form_Draft_Saving
                 : draftState === 'saved'
-                  ? 'Draft saved'
-                  : 'Save and finish later'
+                  ? strings.Form_Draft_Saved
+                  : strings.Form_Draft_SaveAndFinishLater
             }
-            disabled={submitting || draftState === 'saving'}
+            disabled={submitting || draftState === 'saving' || draftLoading}
             onClick={() => {
               void handleSaveDraft();
             }}
@@ -733,24 +981,28 @@ export const FormRenderer: React.FunctionComponent<IFormRendererProps> = (props)
 
         {draftState === 'error' && (
           <span className={styles.saveIndicator + ' ' + styles.saveIndicatorError}>
-            <Icon iconName="Warning" /> Draft not saved
+            <Icon iconName="Warning" /> {strings.Form_Draft_NotSaved}
           </span>
         )}
 
         {isWizard && currentStep < visibleSections.length - 1 ? (
           <PrimaryButton
-            text="Next"
+            text={strings.Form_Nav_Next}
             onRenderIcon={() => <Icon iconName="ChevronRight" />}
             onClick={goNext}
           />
         ) : (
           <PrimaryButton
             className={styles.submitButton}
-            disabled={submitting}
+            disabled={submitting || draftLoading}
             onClick={() => {
               void handleSubmit();
             }}
-            text={submitting ? undefined : isPreview ? 'Submit (preview)' : settings.submitButtonText || 'Submit'}
+            text={submitting ? undefined : isPreview
+                ? strings.Form_Submit_Preview
+                : editingId !== undefined
+                  ? strings.Form_Edit_Save
+                  : settings.submitButtonText || strings.Form_Submit_Button}
           >
             {submitting && <Spinner size={SpinnerSize.small} />}
           </PrimaryButton>
@@ -791,7 +1043,7 @@ export const ResponseFormView: React.FunctionComponent<IResponseFormViewProps> =
                 spService={props.spService}
               />
             ) : (
-              <div className={styles.readOnlyValue}>No answer</div>
+              <div className={styles.readOnlyValue}>{strings.Form_Response_NoAnswer}</div>
             )}
           </div>
         );
@@ -801,4 +1053,5 @@ export const ResponseFormView: React.FunctionComponent<IResponseFormViewProps> =
 };
 
 /** Exported for the response detail panel, which shows values without controls. */
-export const plainAnswer = (field: IFormField, value: unknown): string => formatValue(field, value);
+export const plainAnswer = (field: IFormField, value: unknown, locale?: string): string =>
+  formatValue(field, value, messageBag, locale);

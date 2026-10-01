@@ -326,6 +326,12 @@ export interface IFormSettings {
   closedMessage?: string;
   /** let respondents save a partial response and resume later */
   allowSaveDraft?: boolean;
+  /** let respondents open and edit their own earlier response */
+  allowEdit?: boolean;
+  /** route completed responses through an approve / reject step */
+  enableApproval?: boolean;
+  /** email the respondent when their response is approved or rejected (needs enableApproval) */
+  approvalNotify?: boolean;
 
   dashboard?: IDashboardSettings;
 }
@@ -334,6 +340,13 @@ export interface IFormDefinition {
   schemaVersion: number;
   sections: IFormSection[];
   settings: IFormSettings;
+  /**
+   * Internal column names once used by a published question that has since been
+   * deleted. Their SharePoint columns still exist, so generateInternalName must
+   * never hand the same name to a new question (it would silently adopt the old
+   * column's type and data). See retireField() in formUtils.
+   */
+  retiredColumns?: string[];
 }
 
 export const DEFAULT_FORM_SETTINGS: IFormSettings = {
@@ -355,7 +368,130 @@ export const DEFAULT_FORM_SETTINGS: IFormSettings = {
   oneResponsePerPerson: false,
   closedMessage: 'This form is no longer accepting responses.',
   allowSaveDraft: false,
+  allowEdit: false,
+  enableApproval: false,
+  approvalNotify: false,
   dashboard: { ...DEFAULT_DASHBOARD_SETTINGS }
+};
+
+
+// ---------------------------------------------------------------------------
+// user-visible strings produced by browser-free logic
+// ---------------------------------------------------------------------------
+
+/**
+ * These modules are compiled for Node tests and must not import the SPFx loc
+ * module, so every English string they can produce is defined here and callers
+ * may pass a translated bag (same keys, prefixed "Logic_") in its place. Missing
+ * keys fall back to English. Tokens look like {label}.
+ */
+export interface IMessageBag {
+  [key: string]: string;
+}
+
+const STATIC_MESSAGES: IMessageBag = {
+  // validation
+  Logic_ThisQuestion: 'This question',
+  Logic_Required: '{label} is required',
+  Logic_RequiredConsent: 'Please tick the box to continue',
+  Logic_RequiredFile: 'Please attach at least one file',
+  Logic_RequiredSignature: 'Please add your signature',
+  Logic_RequiredLikert: 'Please answer every row',
+  Logic_InvalidEmail: 'Enter a valid email address',
+  Logic_InvalidPhone: 'Enter a valid phone number',
+  Logic_InvalidUrl: 'Enter a valid web address starting with http:// or https://',
+  Logic_MinValue: 'Value must be at least {value}',
+  Logic_MaxValue: 'Value must be at most {value}',
+  Logic_MaxLength: 'Maximum length is {max} characters',
+  Logic_ChooseAtLeastOne: 'Choose at least {count} option',
+  Logic_ChooseAtLeastMany: 'Choose at least {count} options',
+  Logic_ChooseAtMostOne: 'Choose no more than {count} option',
+  Logic_ChooseAtMostMany: 'Choose no more than {count} options',
+  Logic_LikertRemaining: 'Please answer every row ({count} remaining)',
+  Logic_MaxFilesOne: 'Attach no more than {count} file',
+  Logic_MaxFilesMany: 'Attach no more than {count} files',
+  Logic_FileTooLarge: '"{name}" is larger than {size} MB',
+  Logic_FileTypeNotAccepted: '"{name}" is not an accepted file type ({types})',
+  Logic_AddressRequired: 'Enter at least a street and a city',
+  Logic_PatternDefault: 'This answer is not in the expected format',
+  // value formatting
+  Logic_Yes: 'Yes',
+  Logic_No: 'No',
+  Logic_Agreed: 'Agreed',
+  Logic_NotAgreed: 'Not agreed',
+  Logic_Signed: 'Signed',
+  // chart / segment labels
+  Logic_NoAnswer: '(no answer)',
+  Logic_Unknown: '(unknown)',
+  Logic_OtherSlice: 'Other ({count})',
+  // CSV
+  Logic_CsvResponseId: 'Response ID',
+  Logic_CsvSubmitted: 'Submitted',
+  Logic_CsvSubmittedBy: 'Submitted by',
+  // notification email
+  Logic_EmailQuestion: 'Question',
+  Logic_EmailViewItem: 'View in Microsoft Lists',
+  Logic_EmailFooter: 'Sent automatically by Smart Forms.',
+  // availability
+  Logic_ClosedDefault: 'This form is no longer accepting responses.',
+  Logic_NotYetOpen: 'This form opens on {date}.',
+  Logic_AlreadyResponded: 'You have already responded to this form. Thank you!',
+  // pre-flight checks
+  Logic_UntitledQuestion: 'An untitled question',
+  Logic_Issue_NoQuestions: 'Add at least one question before collecting responses.',
+  Logic_Issue_NoTitle: 'A question has no text — it will be named automatically when you publish.',
+  Logic_Issue_DuplicateTitle: '{label} shares its text with another question, which makes results harder to read.',
+  Logic_Issue_NeedTwoOptions: '{label} needs at least two options.',
+  Logic_Issue_ImageNoImage: '{label} has options with no image — they will show as text tiles.',
+  Logic_Issue_LikertNeedRow: '{label} needs at least one row.',
+  Logic_Issue_LikertNeedColumns: '{label} needs at least two scale columns.',
+  Logic_Issue_NoLookupList: '{label} has no source list selected.',
+  Logic_Issue_NoFormula: '{label} has no formula.',
+  Logic_Issue_BadFormula: '{label} has a formula that cannot be worked out. Check the brackets and operators.',
+  Logic_Issue_MissingRefs: '{label} refers to questions that do not exist: {names}.',
+  Logic_Issue_BadPattern: '{label} has an invalid validation pattern.',
+  Logic_Issue_BrokenRule: '{label} has a branching rule pointing at a deleted question.',
+  Logic_Issue_SelfRule: '{label} has a branching rule that refers to itself.',
+  Logic_Issue_RuleMismatch: '{label} has a branching rule that no longer fits the question it depends on.',
+  Logic_Issue_RequiredReadOnly:
+    '{label} is both required and read-only, so it can only be answered by a prefilled link.',
+  Logic_Issue_EmptySection: 'A section has no questions and will be skipped.',
+  Logic_Issue_CloseBeforeOpen:
+    'The close date is on or before the open date, so the form will never accept responses.',
+  Logic_Issue_ApprovalNotifyWithoutApproval: 'Approval emails are switched on but the approval step is off.',
+  // branching operators
+  Logic_Op_equals: 'is',
+  Logic_Op_notEquals: 'is not',
+  Logic_Op_contains: 'contains',
+  Logic_Op_notContains: 'does not contain',
+  Logic_Op_notEmpty: 'is answered',
+  Logic_Op_empty: 'is not answered',
+  Logic_Op_greaterThan: 'is greater than',
+  Logic_Op_greaterOrEqual: 'is at least',
+  Logic_Op_lessThan: 'is less than',
+  Logic_Op_lessOrEqual: 'is at most',
+  Logic_Op_between: 'is between',
+  Logic_Op_before: 'is before',
+  Logic_Op_after: 'is after'
+};
+
+/** Replace {token} placeholders. Unknown tokens are left visible to make a missing param obvious. */
+export const formatMessage = (template: string, params?: { [token: string]: string | number }): string =>
+  String(template).replace(/\{(\w+)\}/g, (whole: string, name: string) =>
+    params && params[name] !== undefined ? String(params[name]) : whole
+  );
+
+/** Fill in defaults for settings added after a form was saved, and keep dependent flags consistent. */
+export const normalizeSettings = (settings: Partial<IFormSettings> | undefined): IFormSettings => {
+  const merged: IFormSettings = { ...DEFAULT_FORM_SETTINGS, ...(settings || {}) } as IFormSettings;
+  merged.allowEdit = merged.allowEdit === true;
+  merged.enableApproval = merged.enableApproval === true;
+  // approval emails only make sense when an approval step exists
+  merged.approvalNotify = merged.enableApproval && merged.approvalNotify === true;
+  if (!merged.dashboard) {
+    merged.dashboard = { ...DEFAULT_DASHBOARD_SETTINGS };
+  }
+  return merged;
 };
 
 /** Lightweight unique id (no external dependency). */
@@ -658,6 +794,51 @@ export const FIELD_PRESETS: IFieldPreset[] = [
   }
 ];
 
+const buildDefaultMessages = (): IMessageBag => {
+  const bag: IMessageBag = { ...STATIC_MESSAGES };
+  FIELD_TYPE_META.forEach((meta) => {
+    bag['Logic_Type_' + meta.type] = meta.label;
+    bag['Logic_TypeDesc_' + meta.type] = meta.description;
+    bag['Logic_Category_' + meta.category] = meta.category;
+  });
+  FIELD_PRESETS.forEach((preset) => {
+    bag['Logic_Preset_' + preset.key] = preset.label;
+    bag['Logic_PresetDesc_' + preset.key] = preset.description;
+  });
+  return bag;
+};
+
+/** Every Logic_ key with its English text; pass a translated bag with the same keys to override. */
+export const DEFAULT_MESSAGES: IMessageBag = buildDefaultMessages();
+
+/** Look up a message (bag first, English default second) and fill its tokens. */
+export const msg = (
+  key: string,
+  params?: { [token: string]: string | number },
+  messages?: IMessageBag
+): string => {
+  const template = (messages && messages[key]) || DEFAULT_MESSAGES[key] || key;
+  return formatMessage(template, params);
+};
+
+/** Localized display label for a field type. */
+export const fieldTypeLabel = (type: FieldType, messages?: IMessageBag): string =>
+  msg('Logic_Type_' + type, undefined, messages);
+
+/** Localized one-line description for a field type. */
+export const fieldTypeDescription = (type: FieldType, messages?: IMessageBag): string =>
+  msg('Logic_TypeDesc_' + type, undefined, messages);
+
+/** Localized palette category name. */
+export const fieldCategoryLabel = (category: FieldCategory, messages?: IMessageBag): string =>
+  msg('Logic_Category_' + category, undefined, messages);
+
+/** Localized preset label / description. */
+export const fieldPresetLabel = (preset: IFieldPreset, messages?: IMessageBag): string =>
+  msg('Logic_Preset_' + preset.key, undefined, messages);
+export const fieldPresetDescription = (preset: IFieldPreset, messages?: IMessageBag): string =>
+  msg('Logic_PresetDesc_' + preset.key, undefined, messages);
+
 const FALLBACK_META: IFieldTypeMeta = {
   type: FieldType.Text,
   label: 'Question',
@@ -811,6 +992,14 @@ interface ILegacyRule {
   value?: string;
 }
 
+const normalizeRetired = (definition: IFormDefinition): void => {
+  if (Array.isArray(definition.retiredColumns)) {
+    definition.retiredColumns = definition.retiredColumns.filter((n) => typeof n === 'string' && n.length > 0);
+  } else {
+    delete definition.retiredColumns;
+  }
+};
+
 /**
  * Bring a persisted definition up to CURRENT_SCHEMA_VERSION.
  *
@@ -826,10 +1015,8 @@ export const migrateDefinition = (input: IFormDefinition): IFormDefinition => {
 
   if (from >= CURRENT_SCHEMA_VERSION) {
     // still normalize settings so older builds that predate a setting get it
-    definition.settings = { ...DEFAULT_FORM_SETTINGS, ...definition.settings };
-    if (!definition.settings.dashboard) {
-      definition.settings.dashboard = { ...DEFAULT_DASHBOARD_SETTINGS };
-    }
+    definition.settings = normalizeSettings(definition.settings);
+    normalizeRetired(definition);
     return definition;
   }
 
@@ -890,10 +1077,8 @@ export const migrateDefinition = (input: IFormDefinition): IFormDefinition => {
     return { ...section, fields };
   });
 
-  definition.settings = { ...DEFAULT_FORM_SETTINGS, ...definition.settings };
-  if (!definition.settings.dashboard) {
-    definition.settings.dashboard = { ...DEFAULT_DASHBOARD_SETTINGS };
-  }
+  definition.settings = normalizeSettings(definition.settings);
+  normalizeRetired(definition);
   definition.schemaVersion = CURRENT_SCHEMA_VERSION;
   return definition;
 };

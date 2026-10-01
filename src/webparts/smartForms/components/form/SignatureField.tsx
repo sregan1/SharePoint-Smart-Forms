@@ -1,6 +1,8 @@
 import * as React from 'react';
-import { DefaultButton } from '@fluentui/react';
+import { DefaultButton, TextField } from '@fluentui/react';
 import styles from './FormRenderer.module.scss';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 
 export interface ISignatureFieldProps {
   /** data URL of the captured signature, or '' when unsigned */
@@ -39,6 +41,8 @@ export const SignatureField: React.FunctionComponent<ISignatureFieldProps> = (pr
   const drawing = React.useRef<boolean>(false);
   const lastPoint = React.useRef<IPoint | undefined>(undefined);
   const [hasInk, setHasInk] = React.useState<boolean>(!!props.value);
+  const [typing, setTyping] = React.useState<boolean>(false);
+  const [typedName, setTypedName] = React.useState<string>('');
 
   const ink = props.inkColor || '#201f1e';
 
@@ -156,37 +160,95 @@ export const SignatureField: React.FunctionComponent<ISignatureFieldProps> = (pr
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
     }
     setHasInk(false);
+    setTypedName('');
     props.onChange('');
   };
 
+  /** Render a typed name onto the canvas so the stored value is still a PNG data URL. */
+  const renderTyped = (text: string): void => {
+    const canvas = canvasRef.current;
+    const ctx = context();
+    setTypedName(text);
+    if (!canvas || !ctx) {
+      return;
+    }
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    const name = text.trim();
+    if (name.length === 0) {
+      setHasInk(false);
+      props.onChange('');
+      return;
+    }
+    ctx.save();
+    ctx.fillStyle = ink;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    let size = 48;
+    const family = '"Segoe Script", "Brush Script MT", cursive, serif';
+    ctx.font = 'italic ' + size + 'px ' + family;
+    while (size > 14 && ctx.measureText(name).width > WIDTH - 24) {
+      size -= 2;
+      ctx.font = 'italic ' + size + 'px ' + family;
+    }
+    ctx.fillText(name, WIDTH / 2, HEIGHT / 2, WIDTH - 16);
+    ctx.restore();
+    setHasInk(true);
+    props.onChange(canvas.toDataURL('image/png'));
+  };
+
+  const switchMode = (): void => {
+    // the two modes share one canvas, so switching starts fresh
+    clear();
+    setTyping(!typing);
+  };
+
   if (props.disabled && props.value) {
-    return <img className={styles.signatureImage} src={props.value} alt="Signature" />;
+    return <img className={styles.signatureImage} src={props.value} alt={strings.Form_Signature_Alt} />;
   }
 
   return (
     <div className={styles.signatureWrap}>
+      {typing && (
+        <TextField
+          label={strings.Form_Signature_TypeLabel}
+          value={typedName}
+          maxLength={80}
+          autoComplete="name"
+          ariaLabel={strings.Form_Signature_TypeLabel}
+          onChange={(_e, v) => renderTyped(v || '')}
+          styles={{ root: { maxWidth: WIDTH, marginBottom: 8 } }}
+        />
+      )}
       <canvas
         ref={canvasRef}
         className={hasInk ? styles.signaturePad + ' ' + styles.signaturePadFilled : styles.signaturePad}
         role="img"
-        aria-label={(props.ariaLabel || 'Signature') + (hasInk ? ' — signed' : ' — empty')}
+        aria-label={formatString(hasInk ? strings.Form_Signature_AriaSigned : strings.Form_Signature_AriaEmpty, {
+          label: props.ariaLabel || strings.Form_Signature_Alt
+        })}
         aria-describedby={props.ariaDescribedBy}
         aria-invalid={props.invalid ? true : undefined}
-        onPointerDown={start}
-        onPointerMove={draw}
-        onPointerUp={end}
-        onPointerCancel={end}
-        onPointerLeave={end}
+        onPointerDown={typing ? undefined : start}
+        onPointerMove={typing ? undefined : draw}
+        onPointerUp={typing ? undefined : end}
+        onPointerCancel={typing ? undefined : end}
+        onPointerLeave={typing ? undefined : end}
       />
       <div className={styles.signatureActions}>
         <DefaultButton
           iconProps={{ iconName: 'EraseTool' }}
-          text="Clear"
+          text={strings.Form_Signature_Clear}
           disabled={!hasInk || props.disabled}
           onClick={clear}
         />
+        <DefaultButton
+          iconProps={{ iconName: typing ? 'InkingTool' : 'Keyboard' }}
+          text={typing ? strings.Form_Signature_DrawInstead : strings.Form_Signature_TypeInstead}
+          disabled={props.disabled}
+          onClick={switchMode}
+        />
         <span className={styles.signatureHint}>
-          {hasInk ? 'Signed' : 'Sign above using a mouse, pen or finger'}
+          {hasInk ? strings.Form_Signature_Signed : strings.Form_Signature_Prompt}
         </span>
       </div>
     </div>

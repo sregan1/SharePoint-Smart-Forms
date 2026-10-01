@@ -66,7 +66,7 @@
 .filterCount {
   font-size: $text-sm;
   color: #{$fg-muted};
-  margin-left: auto;
+  margin-inline-start: auto;
   white-space: nowrap;
 }
 
@@ -331,7 +331,7 @@
   font-size: $text-base;
   color: #{$fg};
   padding: $space-1 $space-2;
-  border-left: 2px solid #{$border};
+  border-inline-start: 2px solid #{$border};
   background: #{$surface};
   border-radius: 0 $radius-sm $radius-sm 0;
   word-break: break-word;
@@ -362,7 +362,7 @@
 }
 
 .segmentCount {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-size: $text-xs;
   color: #{$fg-muted};
   font-weight: 400;
@@ -535,4 +535,56 @@
   .detailRow {
     break-inside: avoid;
   }
+}
+
+// ----- approval workflow -----
+.approvalChip {
+  display: inline-flex;
+  align-items: center;
+  gap: $space-1;
+  padding: 2px $space-2;
+  border-radius: $radius-pill;
+  font-size: $text-xs;
+  font-weight: 600;
+  border: 1px solid #{$border};
+  color: #{$fg-muted};
+}
+
+.approvalApproved {
+  border-color: #0ca30c;
+  color: #0b7a0b;
+}
+
+.approvalRejected {
+  border-color: #d03b3b;
+  color: #b02a2a;
+}
+
+.approvalPending {
+  border-color: #fab219;
+  color: #8a6100;
+}
+
+.approvalBox {
+  border: 1px solid #{$border};
+  border-radius: $radius-lg;
+  padding: $space-3;
+  margin-block-end: $space-3;
+}
+
+.approvalActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $space-2;
+  margin-block-start: $space-2;
+}
+
+.approvalMeta {
+  font-size: $text-xs;
+  color: #{$fg-muted};
+  margin-block-start: $space-1;
+}
+
+.noticeBar {
+  margin-block-end: $space-2;
 }

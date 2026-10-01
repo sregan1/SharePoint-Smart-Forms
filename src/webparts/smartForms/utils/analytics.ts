@@ -1,5 +1,10 @@
-import { FieldType, IFormField, ILikertValue, IResponseItem } from '../models';
-import { effectiveChoices, formatSharePointValue, normalizeFromSharePoint } from './formUtils';
+import { FieldType, IFormField, ILikertValue, IMessageBag, IResponseItem, msg } from '../models';
+import {
+  effectiveChoices,
+  formatSharePointValue,
+  normalizeFromSharePoint,
+  splitMultiValue
+} from './formUtils';
 import { stripHtml } from './sanitizeHtml';
 
 /**
@@ -7,11 +12,25 @@ import { stripHtml } from './sanitizeHtml';
  *
  * Pure functions over the loaded response set — no React, no SharePoint — so the
  * views can memoize them and the tests can exercise them directly.
+ *
+ * Chart rows and segments carry two separate things: a display `label` (which
+ * may be translated or decorated, e.g. "4 ★") and the raw `filterValue` used to
+ * find the matching responses again (e.g. "4"). Never filter by label; use
+ * matchesRowFilter().
  */
 
 export interface IDistributionRow {
+  /** display text (localized / decorated) */
   label: string;
   count: number;
+  /**
+   * The raw answer key this row stands for: "4" for a "4 ★" rating row,
+   * "Yes" for a localized Yes/No row, "2026-03-05" for a Date row, "09" for a
+   * Time row grouped by hour. Undefined only on a folded "Other" row.
+   */
+  filterValue?: string;
+  /** set on a folded "Other" row: every raw key that was folded into it */
+  filterValues?: string[];
 }
 
 export const isAnswered = (value: unknown): boolean => {
@@ -21,97 +40,198 @@ export const isAnswered = (value: unknown): boolean => {
   return !(Array.isArray(value) && value.length === 0);
 };
 
+/** Yes/No answer as its stable key, or undefined when unanswered (null is NOT "No"). */
+const yesNoKey = (raw: unknown): 'Yes' | 'No' | undefined => {
+  if (raw === true || raw === 'true' || raw === 1 || raw === 'Yes') {
+    return 'Yes';
+  }
+  if (raw === false || raw === 'false' || raw === 0 || raw === 'No') {
+    return 'No';
+  }
+  return undefined;
+};
+
+/** Field-aware "was this question answered": an unanswered Yes/No is not a No. */
+export const isFieldAnswered = (field: IFormField, value: unknown): boolean => {
+  if (field.type === FieldType.YesNo) {
+    return yesNoKey(value) !== undefined;
+  }
+  return isAnswered(value);
+};
+
 export const answeredCount = (field: IFormField, items: IResponseItem[]): number =>
-  items.filter((item) => isAnswered(item.values[field.internalName])).length;
+  items.filter((item) => isFieldAnswered(field, item.values[field.internalName])).length;
+
+const pad2 = (n: number): string => (n < 10 ? '0' + n : String(n));
+
+const asDate = (field: IFormField, raw: unknown): Date | undefined => {
+  if (raw instanceof Date) {
+    return isNaN(raw.getTime()) ? undefined : raw;
+  }
+  const normalized = normalizeFromSharePoint(field, raw);
+  return normalized instanceof Date ? normalized : undefined;
+};
+
+/** Local calendar date key, "YYYY-MM-DD". */
+const localDateKey = (date: Date): string =>
+  date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate());
+
+/**
+ * The raw keys one answer contributes to a distribution / segment / filter.
+ * This is the single source of truth shared by distributionFor, segmentBy and
+ * matchesRowFilter so a clicked bar always selects exactly the responses it counted.
+ * Empty array = unanswered.
+ */
+export const answerKeys = (field: IFormField, raw: unknown): string[] => {
+  if (!isFieldAnswered(field, raw)) {
+    return [];
+  }
+  switch (field.type) {
+    case FieldType.YesNo: {
+      const key = yesNoKey(raw);
+      return key ? [key] : [];
+    }
+    case FieldType.Consent:
+      return [raw === true || raw === 'true' ? 'Agreed' : 'Not agreed'];
+    case FieldType.Person: {
+      const normalized = normalizeFromSharePoint(field, raw);
+      return Array.isArray(normalized)
+        ? (normalized as { displayName?: string }[])
+            .map((person) => (person && person.displayName) || '')
+            .filter((name) => name.length > 0)
+        : [];
+    }
+    case FieldType.Date: {
+      const date = asDate(field, raw);
+      return date ? [localDateKey(date)] : [];
+    }
+    case FieldType.Time: {
+      const date = asDate(field, raw);
+      return date ? [pad2(date.getHours())] : [];
+    }
+    case FieldType.Rating: {
+      const num = Number(raw);
+      return isNaN(num) ? [] : [String(num)];
+    }
+    case FieldType.Scale: {
+      const num = Number(raw);
+      return isNaN(num) ? [] : [String(Math.round(num * 100) / 100)];
+    }
+    default:
+      break;
+  }
+  if (Array.isArray(raw)) {
+    return (raw as unknown[]).map((v) => String(v));
+  }
+  // multi-value text columns hold "A; B" — split so each selection counts (and filters) on its own
+  if (
+    field.allowMultiple &&
+    (field.type === FieldType.Choice || field.type === FieldType.ImageChoice || field.type === FieldType.Lookup)
+  ) {
+    return splitMultiValue(String(raw));
+  }
+  return [String(raw)];
+};
+
+/** Display label for a raw answer key. */
+const labelForKey = (
+  field: IFormField,
+  key: string,
+  labels?: IMessageBag,
+  locale?: string
+): string => {
+  switch (field.type) {
+    case FieldType.YesNo:
+      return key === 'Yes' ? msg('Logic_Yes', undefined, labels) : msg('Logic_No', undefined, labels);
+    case FieldType.Consent:
+      return key === 'Agreed' ? msg('Logic_Agreed', undefined, labels) : msg('Logic_NotAgreed', undefined, labels);
+    case FieldType.Date: {
+      const parts = key.split('-');
+      const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+      return isNaN(date.getTime())
+        ? key
+        : date.toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+    case FieldType.Time: {
+      const date = new Date(2000, 0, 1, Number(key), 0, 0, 0);
+      return isNaN(date.getTime()) ? key : date.toLocaleTimeString(locale, { hour: 'numeric' });
+    }
+    case FieldType.Rating:
+      return key + (field.ratingIcon === 'like' ? '' : ' ★');
+    default:
+      return key;
+  }
+};
+
+/**
+ * Whether a response falls in a clicked chart row / segment. Pass the row or
+ * segment object itself (anything with filterValue / filterValues).
+ */
+export const matchesRowFilter = (
+  field: IFormField,
+  item: IResponseItem,
+  row: { filterValue?: string; filterValues?: string[] }
+): boolean => {
+  const keys = answerKeys(field, item.values[field.internalName]);
+  if (row.filterValues && row.filterValues.length > 0) {
+    return keys.filter((k) => row.filterValues!.indexOf(k) !== -1).length > 0;
+  }
+  if (row.filterValue === undefined) {
+    return false;
+  }
+  if (row.filterValue === '') {
+    return keys.length === 0;
+  }
+  return keys.indexOf(row.filterValue) !== -1;
+};
 
 /** Counts per category for a choice-like field, honoring the designed order. */
-export const distributionFor = (field: IFormField, items: IResponseItem[]): IDistributionRow[] => {
-  const counts: { [label: string]: number } = {};
-  const bump = (label: string): void => {
-    counts[label] = (counts[label] || 0) + 1;
+export const distributionFor = (
+  field: IFormField,
+  items: IResponseItem[],
+  labels?: IMessageBag,
+  locale?: string
+): IDistributionRow[] => {
+  const counts: { [key: string]: number } = {};
+  const bump = (key: string): void => {
+    counts[key] = (counts[key] || 0) + 1;
   };
 
   items.forEach((item) => {
-    const raw = item.values[field.internalName];
-    if (!isAnswered(raw)) {
-      return;
-    }
-    if (field.type === FieldType.YesNo) {
-      bump(raw === true || raw === 'true' ? 'Yes' : 'No');
-      return;
-    }
-    if (field.type === FieldType.Consent) {
-      bump(raw === true || raw === 'true' ? 'Agreed' : 'Not agreed');
-      return;
-    }
-    if (field.type === FieldType.Person) {
-      const normalized = normalizeFromSharePoint(field, raw);
-      if (Array.isArray(normalized)) {
-        (normalized as { displayName?: string }[]).forEach((person) => {
-          if (person && person.displayName) {
-            bump(person.displayName);
-          }
-        });
-      }
-      return;
-    }
-    if (Array.isArray(raw)) {
-      (raw as unknown[]).forEach((v) => bump(String(v)));
-      return;
-    }
-    // multi-value text columns (image choice, multi lookup) hold "A; B"
-    if (
-      field.allowMultiple &&
-      (field.type === FieldType.ImageChoice || field.type === FieldType.Lookup)
-    ) {
-      String(raw)
-        .split(';')
-        .map((v) => v.trim())
-        .filter((v) => v.length > 0)
-        .forEach(bump);
-      return;
-    }
-    bump(String(raw));
+    answerKeys(field, item.values[field.internalName]).forEach(bump);
+  });
+
+  const row = (key: string): IDistributionRow => ({
+    label: labelForKey(field, key, labels, locale),
+    count: counts[key] || 0,
+    filterValue: key
   });
 
   let rows: IDistributionRow[];
 
-  if (field.type === FieldType.Choice) {
+  if (field.type === FieldType.Choice || field.type === FieldType.ImageChoice) {
     // keep the designer's option order, then any write-in or legacy values
-    const designed = effectiveChoices(field);
-    rows = designed.map((c) => ({ label: c, count: counts[c] || 0 }));
-    Object.keys(counts).forEach((label) => {
-      if (designed.indexOf(label) === -1) {
-        rows.push({ label: label, count: counts[label] });
-      }
-    });
-  } else if (field.type === FieldType.ImageChoice) {
-    const designed = (field.imageChoices || []).map((o) => o.label).filter((l) => l);
-    rows = designed.map((c) => ({ label: c, count: counts[c] || 0 }));
-    Object.keys(counts).forEach((label) => {
-      if (designed.indexOf(label) === -1) {
-        rows.push({ label: label, count: counts[label] });
+    const designed =
+      field.type === FieldType.Choice
+        ? effectiveChoices(field)
+        : (field.imageChoices || []).map((o) => o.label).filter((l) => l);
+    rows = designed.map(row);
+    Object.keys(counts).forEach((key) => {
+      if (designed.indexOf(key) === -1) {
+        rows.push(row(key));
       }
     });
   } else if (field.type === FieldType.YesNo) {
-    rows = [
-      { label: 'Yes', count: counts.Yes || 0 },
-      { label: 'No', count: counts.No || 0 }
-    ];
+    rows = [row('Yes'), row('No')];
   } else if (field.type === FieldType.Consent) {
-    rows = [
-      { label: 'Agreed', count: counts.Agreed || 0 },
-      { label: 'Not agreed', count: counts['Not agreed'] || 0 }
-    ];
+    rows = [row('Agreed'), row('Not agreed')];
   } else if (field.type === FieldType.Rating) {
     const max = field.maxRating || 5;
     rows = [];
     for (let star = max; star >= 1; star--) {
-      const whole = counts[String(star)] || 0;
-      const half = counts[String(star - 0.5)] || 0;
-      rows.push({ label: star + (field.ratingIcon === 'like' ? '' : ' ★'), count: whole });
-      if (field.allowHalfRating && half > 0) {
-        rows.push({ label: star - 0.5 + ' ★', count: half });
+      rows.push(row(String(star)));
+      if (field.allowHalfRating && counts[String(star - 0.5)] > 0) {
+        rows.push(row(String(star - 0.5)));
       }
     }
   } else if (field.type === FieldType.Scale) {
@@ -120,11 +240,15 @@ export const distributionFor = (field: IFormField, items: IResponseItem[]): IDis
     const step = field.step && field.step > 0 ? field.step : 1;
     rows = [];
     for (let value = min; value <= max; value += step) {
-      const key = String(Math.round(value * 100) / 100);
-      rows.push({ label: key, count: counts[key] || 0 });
+      rows.push(row(String(Math.round(value * 100) / 100)));
     }
+  } else if (field.type === FieldType.Date || field.type === FieldType.Time) {
+    // chronological, grouped by local date (Time: by hour) — never by label text
+    rows = Object.keys(counts)
+      .sort()
+      .map(row);
   } else {
-    rows = Object.keys(counts).map((label) => ({ label: label, count: counts[label] }));
+    rows = Object.keys(counts).map(row);
     rows.sort((a, b) => b.count - a.count);
   }
 
@@ -136,9 +260,14 @@ export const distributionFor = (field: IFormField, items: IResponseItem[]): IDis
  *
  * A generated ninth hue would be indistinguishable from an existing one under
  * colorblind simulation, so charts that color by category cap their series and
- * collapse the rest rather than inventing colors.
+ * collapse the rest rather than inventing colors. The "Other" row has no
+ * filterValue; its `filterValues` lists every raw key folded into it.
  */
-export const foldTail = (rows: IDistributionRow[], maxSeries: number): IDistributionRow[] => {
+export const foldTail = (
+  rows: IDistributionRow[],
+  maxSeries: number,
+  labels?: IMessageBag
+): IDistributionRow[] => {
   if (rows.length <= maxSeries) {
     return rows;
   }
@@ -146,7 +275,23 @@ export const foldTail = (rows: IDistributionRow[], maxSeries: number): IDistribu
   const head = sorted.slice(0, maxSeries - 1);
   const tail = sorted.slice(maxSeries - 1);
   const otherCount = tail.reduce((sum, row) => sum + row.count, 0);
-  return head.concat([{ label: 'Other (' + tail.length + ')', count: otherCount }]);
+  const folded: string[] = [];
+  tail.forEach((row) => {
+    if (row.filterValues) {
+      row.filterValues.forEach((v) => folded.push(v));
+    } else if (row.filterValue !== undefined) {
+      folded.push(row.filterValue);
+    } else {
+      folded.push(row.label);
+    }
+  });
+  return head.concat([
+    {
+      label: msg('Logic_OtherSlice', { count: tail.length }, labels),
+      count: otherCount,
+      filterValues: folded
+    }
+  ]);
 };
 
 // ---------------------------------------------------------------------------
@@ -213,10 +358,7 @@ export const rankingStats = (field: IFormField, items: IResponseItem[]): IRankin
     }
     const ordered = Array.isArray(raw)
       ? (raw as unknown[]).map((v) => String(v))
-      : String(raw)
-          .split(';')
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0);
+      : splitMultiValue(String(raw));
     ordered.forEach((label, index) => {
       (positions[label] = positions[label] || []).push(index + 1);
     });
@@ -490,58 +632,97 @@ const advance = (date: Date, grain: TimeGrain): Date => {
   return d;
 };
 
-const labelFor = (date: Date, grain: TimeGrain): string => {
+const labelFor = (date: Date, grain: TimeGrain, locale?: string): string => {
   if (grain === 'month') {
-    return date.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+    return date.toLocaleDateString(locale, { month: 'short', year: '2-digit' });
   }
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return date.toLocaleDateString(locale, { month: 'short', day: 'numeric' });
 };
+
+/** Most buckets a timeline will ever return. */
+export const MAX_TIMELINE_BUCKETS = 400;
+
+export interface ITimelineResult {
+  points: ITimelinePoint[];
+  /** the grain actually used — coarser than requested when the range was too long */
+  grain: TimeGrain;
+  /** true when even the coarsest grain overflowed and the oldest buckets were dropped */
+  truncated: boolean;
+}
+
+const GRAIN_ORDER: TimeGrain[] = ['day', 'week', 'month'];
 
 /**
  * Responses per time bucket, with empty buckets filled in.
  *
  * Gaps matter: skipping days with no responses would draw a line implying steady
- * activity across a quiet week.
+ * activity across a quiet week. When the range would need more than
+ * MAX_TIMELINE_BUCKETS points the grain is coarsened (day -> week -> month); if
+ * even months overflow, the most recent MAX_TIMELINE_BUCKETS are kept and
+ * `truncated` is set so the UI can say so.
  */
-export const timeline = (items: IResponseItem[], grain: TimeGrain): ITimelinePoint[] => {
+export const timelineDetailed = (
+  items: IResponseItem[],
+  grain: TimeGrain,
+  locale?: string
+): ITimelineResult => {
   if (items.length === 0) {
-    return [];
+    return { points: [], grain: grain, truncated: false };
   }
-  const counts: { [key: number]: number } = {};
-  let earliest: Date | undefined;
-  let latest: Date | undefined;
-
-  items.forEach((item) => {
-    const bucket = bucketStart(item.created, grain);
-    const key = bucket.getTime();
-    counts[key] = (counts[key] || 0) + 1;
-    if (!earliest || bucket < earliest) {
-      earliest = bucket;
-    }
-    if (!latest || bucket > latest) {
-      latest = bucket;
-    }
-  });
-
-  if (!earliest || !latest) {
-    return [];
-  }
-
-  const points: ITimelinePoint[] = [];
-  let cursor = earliest;
-  // guard against a pathological range producing thousands of points
-  let guard = 0;
-  while (cursor <= latest && guard < 400) {
-    points.push({
-      label: labelFor(cursor, grain),
-      value: counts[cursor.getTime()] || 0,
-      start: cursor
+  let used: TimeGrain = grain;
+  for (;;) {
+    const counts: { [key: number]: number } = {};
+    let earliest: Date | undefined;
+    let latest: Date | undefined;
+    items.forEach((item) => {
+      const bucket = bucketStart(item.created, used);
+      const key = bucket.getTime();
+      counts[key] = (counts[key] || 0) + 1;
+      if (!earliest || bucket < earliest) {
+        earliest = bucket;
+      }
+      if (!latest || bucket > latest) {
+        latest = bucket;
+      }
     });
-    cursor = advance(cursor, grain);
-    guard++;
+    if (!earliest || !latest) {
+      return { points: [], grain: used, truncated: false };
+    }
+    const coarsest = used === 'month';
+    const points: ITimelinePoint[] = [];
+    let cursor: Date = earliest;
+    // hard stop far beyond any sane range so a corrupt date cannot spin forever
+    let guard = 0;
+    while (cursor <= latest && guard < 100000) {
+      points.push({
+        label: labelFor(cursor, used, locale),
+        value: counts[cursor.getTime()] || 0,
+        start: cursor
+      });
+      cursor = advance(cursor, used);
+      guard++;
+      if (!coarsest && points.length > MAX_TIMELINE_BUCKETS) {
+        break;
+      }
+    }
+    if (points.length <= MAX_TIMELINE_BUCKETS) {
+      return { points: points, grain: used, truncated: false };
+    }
+    if (!coarsest) {
+      used = GRAIN_ORDER[GRAIN_ORDER.indexOf(used) + 1];
+      continue;
+    }
+    return {
+      points: points.slice(points.length - MAX_TIMELINE_BUCKETS),
+      grain: used,
+      truncated: true
+    };
   }
-  return points;
 };
+
+/** Points only — see timelineDetailed for the grain actually used and the truncation flag. */
+export const timeline = (items: IResponseItem[], grain: TimeGrain, locale?: string): ITimelinePoint[] =>
+  timelineDetailed(items, grain, locale).points;
 
 /** Pick a sensible grain from how much history there is. */
 export const suggestGrain = (items: IResponseItem[]): TimeGrain => {
@@ -589,10 +770,16 @@ export interface IKpiSet {
   lastResponse?: Date;
 }
 
+/**
+ * `fields` (optional) are the input questions: when given, completion counts
+ * only answers to those questions, and an unanswered Yes/No is not an answer.
+ * Without it every stored value key is counted, as before.
+ */
 export const computeKpis = (
   items: IResponseItem[],
   questionCount: number,
-  now?: Date
+  now?: Date,
+  fields?: IFormField[]
 ): IKpiSet => {
   const reference = now || new Date();
   const dayMs = 86400000;
@@ -633,7 +820,9 @@ export const computeKpis = (
       ? undefined
       : Math.round(
           (items.reduce((sum, item) => {
-            const answered = Object.keys(item.values).filter((key) => isAnswered(item.values[key])).length;
+            const answered = fields
+              ? fields.filter((f) => isFieldAnswered(f, item.values[f.internalName])).length
+              : Object.keys(item.values).filter((key) => isAnswered(item.values[key])).length;
             return sum + Math.min(1, answered / questionCount);
           }, 0) /
             items.length) *
@@ -690,58 +879,46 @@ export const formatDuration = (seconds: number): string => {
 // ---------------------------------------------------------------------------
 
 export interface ISegment {
+  /** display text */
   label: string;
+  /** raw answer key ('' for the "no answer" segment); use matchesRowFilter(field, item, segment) */
+  filterValue: string;
   items: IResponseItem[];
 }
 
 /**
  * Split a response set by another question's answer.
  *
- * This is what makes "NPS by department" possible. Multi-value answers put a
- * response in every matching segment, so segment sizes can sum to more than the
- * total — reported per segment rather than as a share of the whole.
+ * This is what makes "NPS by department" possible. Multi-value answers (arrays
+ * or "A; B" text) put a response in every selected segment, so segment sizes can
+ * sum to more than the total — reported per segment rather than as a share of
+ * the whole. Date fields segment by local date and Time by hour, chronologically.
  */
-export const segmentBy = (field: IFormField, items: IResponseItem[]): ISegment[] => {
-  const buckets: { [label: string]: IResponseItem[] } = {};
+export const segmentBy = (
+  field: IFormField,
+  items: IResponseItem[],
+  labels?: IMessageBag,
+  locale?: string
+): ISegment[] => {
+  const buckets: { [key: string]: IResponseItem[] } = {};
   const order: string[] = [];
-  const push = (label: string, item: IResponseItem): void => {
-    if (!buckets[label]) {
-      buckets[label] = [];
-      order.push(label);
+  const push = (key: string, item: IResponseItem): void => {
+    if (!buckets[key]) {
+      buckets[key] = [];
+      order.push(key);
     }
-    buckets[label].push(item);
+    if (buckets[key].indexOf(item) === -1) {
+      buckets[key].push(item);
+    }
   };
 
   items.forEach((item) => {
-    const raw = item.values[field.internalName];
-    if (!isAnswered(raw)) {
-      push('(no answer)', item);
+    const keys = answerKeys(field, item.values[field.internalName]);
+    if (keys.length === 0) {
+      push('', item);
       return;
     }
-    if (field.type === FieldType.YesNo) {
-      push(raw === true || raw === 'true' ? 'Yes' : 'No', item);
-      return;
-    }
-    if (field.type === FieldType.Consent) {
-      push(raw === true || raw === 'true' ? 'Agreed' : 'Not agreed', item);
-      return;
-    }
-    if (field.type === FieldType.Person) {
-      const normalized = normalizeFromSharePoint(field, raw);
-      if (Array.isArray(normalized) && normalized.length > 0) {
-        (normalized as { displayName?: string }[]).forEach((person) => {
-          push(person.displayName || '(unknown)', item);
-        });
-      } else {
-        push('(no answer)', item);
-      }
-      return;
-    }
-    if (Array.isArray(raw)) {
-      (raw as unknown[]).forEach((v) => push(String(v), item));
-      return;
-    }
-    push(String(raw), item);
+    keys.forEach((key) => push(key, item));
   });
 
   // put designed choice order first where we know it
@@ -751,9 +928,20 @@ export const segmentBy = (field: IFormField, items: IResponseItem[]): ISegment[]
       : field.type === FieldType.ImageChoice
         ? (field.imageChoices || []).map((o) => o.label)
         : [];
-  const ordered = designed
-    .filter((label) => !!buckets[label])
-    .concat(order.filter((label) => designed.indexOf(label) === -1));
+  let ordered = designed
+    .filter((key) => !!buckets[key])
+    .concat(order.filter((key) => designed.indexOf(key) === -1));
+  if (field.type === FieldType.Date || field.type === FieldType.Time) {
+    // keys are zero-padded, so a plain sort is chronological; "no answer" goes last
+    ordered = order
+      .filter((key) => key !== '')
+      .sort()
+      .concat(order.filter((key) => key === ''));
+  }
 
-  return ordered.map((label) => ({ label: label, items: buckets[label] }));
+  return ordered.map((key) => ({
+    label: key === '' ? msg('Logic_NoAnswer', undefined, labels) : labelForKey(field, key, labels, locale),
+    filterValue: key,
+    items: buckets[key]
+  }));
 };

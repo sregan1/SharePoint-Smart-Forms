@@ -159,9 +159,8 @@ export const buildFieldXml = (field: IFormField): string => {
         '<Field Type="Number" ' +
         common +
         description +
-        ' Decimals="' +
-        decimalsAttribute(field) +
-        '" Percentage="FALSE"' +
+        (decimalsAttribute(field) === 'Automatic' ? '' : ' Decimals="' + decimalsAttribute(field) + '"') +
+        ' Percentage="FALSE"' +
         (typeof field.min === 'number' ? ' Min="' + field.min + '"' : '') +
         (typeof field.max === 'number' ? ' Max="' + field.max + '"' : '') +
         ' />'
@@ -216,7 +215,8 @@ export const buildFieldXml = (field: IFormField): string => {
     }
 
     case 'Boolean':
-      return '<Field Type="Boolean" ' + common + description + '><Default>0</Default></Field>';
+      // no <Default>: an unanswered Yes/No must stay null rather than read as "No"
+      return '<Field Type="Boolean" ' + common + description + ' />';
 
     case 'URL':
       return '<Field Type="URL" ' + common + description + ' Format="Hyperlink" />';
@@ -324,6 +324,46 @@ export const buildDurationFieldXml = (): string => {
     'Required="FALSE"';
   return '<Field Type="Number" ' + common + ' Decimals="0" />';
 };
+
+/** Approval workflow columns (provisioned only when a form enables approval). */
+export const SF_APPROVAL_STATUS_INTERNAL_NAME = 'SFApprovalStatus';
+export const SF_APPROVAL_COMMENT_INTERNAL_NAME = 'SFApprovalComment';
+export const SF_REVIEWED_BY_INTERNAL_NAME = 'SFReviewedBy';
+
+const systemColumnCommon = (internalName: string, displayName: string): string =>
+  'ID="{' +
+  generateDeterministicGuid(internalName) +
+  '}" Name="' +
+  internalName +
+  '" StaticName="' +
+  internalName +
+  '" DisplayName="' +
+  escapeXml(displayName) +
+  '" Group="' +
+  escapeXml(FIELD_GROUP) +
+  '" Required="FALSE"';
+
+export const buildApprovalStatusFieldXml = (): string =>
+  '<Field Type="Choice" ' +
+  systemColumnCommon(SF_APPROVAL_STATUS_INTERNAL_NAME, 'Approval status') +
+  ' Format="Dropdown"><Default>Pending</Default>' +
+  '<CHOICES><CHOICE>Pending</CHOICE><CHOICE>Approved</CHOICE><CHOICE>Rejected</CHOICE></CHOICES></Field>';
+
+export const buildApprovalCommentFieldXml = (): string =>
+  '<Field Type="Note" ' +
+  systemColumnCommon(SF_APPROVAL_COMMENT_INTERNAL_NAME, 'Approval comment') +
+  ' NumLines="3" RichText="FALSE" />';
+
+export const buildReviewedByFieldXml = (): string =>
+  '<Field Type="Text" ' +
+  systemColumnCommon(SF_REVIEWED_BY_INTERNAL_NAME, 'Reviewed by') +
+  ' MaxLength="255" />';
+
+export const APPROVAL_COLUMNS: { internalName: string; xml: () => string; addToView: boolean }[] = [
+  { internalName: SF_APPROVAL_STATUS_INTERNAL_NAME, xml: buildApprovalStatusFieldXml, addToView: false },
+  { internalName: SF_APPROVAL_COMMENT_INTERNAL_NAME, xml: buildApprovalCommentFieldXml, addToView: false },
+  { internalName: SF_REVIEWED_BY_INTERNAL_NAME, xml: buildReviewedByFieldXml, addToView: false }
+];
 
 /** Columns Smart Forms provisions per list, independent of the form's fields. */
 export const SYSTEM_COLUMNS: { internalName: string; xml: () => string; addToView: boolean }[] = [

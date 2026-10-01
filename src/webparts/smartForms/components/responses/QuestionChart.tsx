@@ -1,6 +1,8 @@
 import * as React from 'react';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 import styles from './ResponsesView.module.scss';
-import { ChartKind, FieldType, IFormField, IResponseItem } from '../../models';
+import { ChartKind, FieldType, IFormField, IMessageBag, IResponseItem } from '../../models';
 import { formatValue } from '../../utils/formUtils';
 import {
   answeredCount,
@@ -35,18 +37,32 @@ import {
   IChartDatum
 } from '../charts/Charts';
 
+/** What a click on a chart category stands for; pass it to matchesRowFilter. */
+export interface IDrillTarget {
+  label: string;
+  filterValue?: string;
+  filterValues?: string[];
+}
+
 export interface IQuestionChartProps {
   field: IFormField;
   items: IResponseItem[];
   chart: ChartKind;
   theme: IThemeInfo;
   /** clicking a category filters the table view to those respondents */
-  onDrillDown?: (field: IFormField, categoryLabel: string) => void;
+  onDrillDown?: (field: IFormField, target?: IDrillTarget) => void;
+  locale?: string;
   /** compact rendering for a dashboard tile */
   compact?: boolean;
 }
 
-const toDatum = (row: IDistributionRow): IChartDatum => ({ label: row.label, value: row.count });
+const messages = strings as unknown as IMessageBag;
+
+const toDatum = (row: IDistributionRow): IChartDatum => ({
+  label: row.label,
+  value: row.count,
+  row: { label: row.label, filterValue: row.filterValue, filterValues: row.filterValues }
+});
 
 /**
  * Renders one question's results in whichever form the tile asks for.
@@ -72,7 +88,7 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
   const drill = props.onDrillDown
     ? (datum: IChartDatum) => {
         if (props.onDrillDown) {
-          props.onDrillDown(field, datum.label);
+          props.onDrillDown(field, datum.row || { label: datum.label });
         }
       }
     : undefined;
@@ -81,12 +97,12 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
   if (field.type === FieldType.Scale && field.scaleAnalytics === 'nps' && props.chart !== 'table') {
     const stats = npsStats(field, items);
     if (!stats) {
-      return <div className={styles.emptyCardText}>No scores yet.</div>;
+      return <div className={styles.emptyCardText}>{strings.Responses_Chart_NoScores}</div>;
     }
     const bandRows = [
-      { label: 'Detractors (0–6)', count: stats.detractors, color: STATUS_COLORS.critical },
-      { label: 'Passives (7–8)', count: stats.passives, color: STATUS_COLORS.warning },
-      { label: 'Promoters (9–10)', count: stats.promoters, color: STATUS_COLORS.good }
+      { label: strings.Responses_Chart_Detractors, count: stats.detractors, color: STATUS_COLORS.critical },
+      { label: strings.Responses_Chart_Passives, count: stats.passives, color: STATUS_COLORS.warning },
+      { label: strings.Responses_Chart_Promoters, count: stats.promoters, color: STATUS_COLORS.good }
     ];
     return (
       <div>
@@ -100,7 +116,7 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
             { upTo: 100, color: STATUS_COLORS.good }
           ]}
           ink={ink}
-          caption="NPS score"
+          caption={strings.Responses_Chart_NpsScore}
           displayValue={stats.score > 0 ? '+' + stats.score : String(stats.score)}
         />
         <BarChart
@@ -118,12 +134,15 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
   if (field.type === FieldType.Likert) {
     const stats = likertStats(field, items);
     if (stats.rows.length === 0 || stats.categories.length === 0) {
-      return <div className={styles.emptyCardText}>No answers yet.</div>;
+      return <div className={styles.emptyCardText}>{strings.Responses_Chart_NoAnswers}</div>;
     }
     if (props.chart === 'table') {
       return (
         <DataTable
-          columns={['Statement', 'Average (1–' + stats.categories.length + ')']}
+          columns={[
+            strings.Responses_Chart_Statement,
+            formatString(strings.Responses_Chart_AverageRange, { max: stats.categories.length })
+          ]}
           rows={stats.rows.map((row) => ({
             label: row.label,
             value: row.total > 0 ? String(row.average) : '—'
@@ -145,31 +164,35 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
   if (field.type === FieldType.Ranking) {
     const rows = rankingStats(field, items);
     if (rows.length === 0) {
-      return <div className={styles.emptyCardText}>No rankings yet.</div>;
+      return <div className={styles.emptyCardText}>{strings.Responses_Chart_NoRankings}</div>;
     }
     if (props.chart === 'table') {
       return (
         <DataTable
-          columns={['Option', 'Average position']}
+          columns={[strings.Responses_Chart_Option, strings.Responses_Chart_AveragePosition]}
           rows={rows.map((row) => ({ label: row.label, value: String(row.avgPosition) }))}
         />
       );
     }
     const optionCount = Math.max(rows.length, 1);
+    const rankByLabel: { [label: string]: (typeof rows)[number] } = {};
+    rows.forEach((row, index) => {
+      rankByLabel[index + 1 + '. ' + row.label] = row;
+    });
     // invert: a better (lower) average position must read as a longer bar
     return (
       <BarChart
         data={rows.map((row, index) => ({
           label: index + 1 + '. ' + row.label,
           value: Math.max(0.02, (optionCount - row.avgPosition + 1) / optionCount),
-          detail: 'Average position'
+          detail: strings.Responses_Chart_AveragePosition
         }))}
         color={accent}
         total={1}
         wideLabels={true}
         valueFormatter={(datum) => {
-          const row = rows[Number(datum.label.split('.')[0]) - 1];
-          return row ? 'avg ' + row.avgPosition : '';
+          const row = rankByLabel[datum.label];
+          return row ? formatString(strings.Responses_Chart_AvgValue, { value: row.avgPosition }) : '';
         }}
       />
     );
@@ -189,7 +212,7 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
   ) {
     const answers = textAnswers(field, items);
     if (answers.length === 0) {
-      return <div className={styles.emptyCardText}>No answers yet.</div>;
+      return <div className={styles.emptyCardText}>{strings.Responses_Chart_NoAnswers}</div>;
     }
     const useWords =
       props.chart === 'words' &&
@@ -200,7 +223,7 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
     if (useWords) {
       const words = wordFrequency(field, items, props.compact ? 14 : 30);
       if (words.length === 0) {
-        return <div className={styles.emptyCardText}>Not enough text to summarize yet.</div>;
+        return <div className={styles.emptyCardText}>{strings.Responses_Chart_NotEnoughText}</div>;
       }
       const maxCount = words[0].count;
       return (
@@ -214,8 +237,13 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
                 type="button"
                 className={styles.wordItem}
                 style={{ fontSize: size + 'px', fontWeight: word.count > maxCount / 2 ? 600 : 400 }}
-                title={word.count + (word.count === 1 ? ' mention' : ' mentions')}
-                onClick={() => drill && drill({ label: word.word, value: word.count })}
+                title={formatString(
+                  word.count === 1
+                    ? strings.Responses_Chart_MentionOne
+                    : strings.Responses_Chart_MentionOther,
+                  { count: word.count }
+                )}
+                onClick={() => props.onDrillDown && props.onDrillDown(field, { label: word.word })}
               >
                 {word.word}
               </button>
@@ -237,7 +265,10 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
         </ul>
         {answers.length > shown.length && (
           <div className={styles.segmentNote}>
-            Showing {shown.length} of {answers.length} answers.
+            {formatString(strings.Responses_Chart_ShowingAnswers, {
+              shown: shown.length,
+              total: answers.length
+            })}
           </div>
         )}
       </div>
@@ -252,13 +283,13 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
   ) {
     const stats = numericStats(field, items);
     if (!stats) {
-      return <div className={styles.emptyCardText}>No numeric answers yet.</div>;
+      return <div className={styles.emptyCardText}>{strings.Responses_Chart_NoNumeric}</div>;
     }
     if (props.chart === 'histogram' || props.chart === 'column') {
       const bins = histogram(field, items, props.compact ? 6 : 10);
       return (
         <ColumnChart
-          data={bins.map((bin) => ({ label: bin.label, value: bin.count, detail: 'Responses' }))}
+          data={bins.map((bin) => ({ label: bin.label, value: bin.count, detail: strings.Responses_Chart_Responses }))}
           color={accent}
           total={stats.count}
           ink={ink}
@@ -269,15 +300,15 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
     if (props.chart === 'table') {
       return (
         <DataTable
-          columns={['Statistic', 'Value']}
+          columns={[strings.Responses_Chart_Statistic, strings.Responses_Chart_Value]}
           rows={[
-            { label: 'Responses', value: String(stats.count) },
-            { label: 'Minimum', value: formatValue(field, stats.min) },
-            { label: 'Median', value: formatValue(field, stats.median) },
-            { label: 'Average', value: formatValue(field, stats.avg) },
-            { label: 'Maximum', value: formatValue(field, stats.max) },
-            { label: 'Std deviation', value: String(stats.stdDev) },
-            { label: 'Total', value: formatValue(field, stats.sum) }
+            { label: strings.Responses_Chart_Responses, value: String(stats.count) },
+            { label: strings.Responses_Chart_Minimum, value: formatValue(field, stats.min) },
+            { label: strings.Responses_Chart_Median, value: formatValue(field, stats.median) },
+            { label: strings.Responses_Chart_Average, value: formatValue(field, stats.avg) },
+            { label: strings.Responses_Chart_Maximum, value: formatValue(field, stats.max) },
+            { label: strings.Responses_Chart_StdDeviation, value: String(stats.stdDev) },
+            { label: strings.Responses_Chart_Total, value: formatValue(field, stats.sum) }
           ]}
         />
       );
@@ -286,57 +317,65 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
       <div className={styles.statsRow}>
         <div className={styles.stat}>
           <span className={styles.statValue}>{formatValue(field, stats.median)}</span>
-          <span className={styles.statLabel}>Median</span>
+          <span className={styles.statLabel}>{strings.Responses_Chart_Median}</span>
         </div>
         <div className={styles.stat}>
           <span className={styles.statValue}>{formatValue(field, stats.avg)}</span>
-          <span className={styles.statLabel}>Average</span>
+          <span className={styles.statLabel}>{strings.Responses_Chart_Average}</span>
         </div>
         <div className={styles.stat}>
           <span className={styles.statValue}>{formatValue(field, stats.min)}</span>
-          <span className={styles.statLabel}>Min</span>
+          <span className={styles.statLabel}>{strings.Responses_Chart_Min}</span>
         </div>
         <div className={styles.stat}>
           <span className={styles.statValue}>{formatValue(field, stats.max)}</span>
-          <span className={styles.statLabel}>Max</span>
+          <span className={styles.statLabel}>{strings.Responses_Chart_Max}</span>
         </div>
         <div className={styles.stat}>
           <span className={styles.statValue}>{stats.stdDev}</span>
-          <span className={styles.statLabel}>Std dev</span>
+          <span className={styles.statLabel}>{strings.Responses_Chart_StdDev}</span>
         </div>
       </div>
     );
   }
 
-  // ----- date / time: bucket by value -----
+  // ----- date / time: chronological, grouped by local date (Time: by hour) -----
   if (field.type === FieldType.Date || field.type === FieldType.Time) {
-    const rows = distributionFor(field, items).map((row) => ({
-      label: row.label.length > 12 ? row.label.slice(0, 12) : row.label,
-      count: row.count
-    }));
+    const rows = distributionFor(field, items, messages, props.locale);
     if (rows.length === 0) {
-      return <div className={styles.emptyCardText}>No answers yet.</div>;
+      return <div className={styles.emptyCardText}>{strings.Responses_Chart_NoAnswers}</div>;
+    }
+    if (props.chart === 'table') {
+      return (
+        <DataTable
+          columns={[strings.Responses_Chart_Answer, strings.Responses_Chart_Responses]}
+          rows={rows.map((row) => ({ label: row.label, value: row.count + ' · ' + formatPercent(row.count, total) }))}
+        />
+      );
     }
     return (
-      <BarChart
-        data={rows.slice(0, 12).map(toDatum)}
+      <ColumnChart
+        data={rows.map(toDatum)}
         color={accent}
         total={total}
+        ink={ink}
+        height={props.compact ? 130 : 170}
+        labelEvery={Math.max(1, Math.ceil(rows.length / 8))}
         onSelect={drill}
       />
     );
   }
 
   // ----- everything else is a distribution -----
-  const rows = distributionFor(field, items);
+  const rows = distributionFor(field, items, messages, props.locale);
   if (rows.length === 0 || total === 0) {
-    return <div className={styles.emptyCardText}>No answers yet.</div>;
+    return <div className={styles.emptyCardText}>{strings.Responses_Chart_NoAnswers}</div>;
   }
 
   if (props.chart === 'table') {
     return (
       <DataTable
-        columns={['Answer', 'Responses']}
+        columns={[strings.Responses_Chart_Answer, strings.Responses_Chart_Responses]}
         rows={rows.map((row) => ({
           label: row.label,
           value: row.count + ' · ' + formatPercent(row.count, total)
@@ -346,7 +385,7 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
   }
 
   if (props.chart === 'donut') {
-    const folded = foldTail(rows, MAX_CATEGORICAL_SERIES);
+    const folded = foldTail(rows, MAX_CATEGORICAL_SERIES, messages);
     return (
       <DonutChart
         data={folded.map(toDatum)}
@@ -354,7 +393,9 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
         total={total}
         ink={ink}
         centerLabel={String(total)}
-        centerSubLabel={total === 1 ? 'response' : 'responses'}
+        centerSubLabel={
+          total === 1 ? strings.Responses_Chart_ResponseOne : strings.Responses_Chart_ResponseOther
+        }
         onSelect={drill}
       />
     );
@@ -379,7 +420,7 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
     const min = typeof field.min === 'number' ? field.min : 1;
     const max = typeof field.max === 'number' ? field.max : 5;
     if (!stats) {
-      return <div className={styles.emptyCardText}>No answers yet.</div>;
+      return <div className={styles.emptyCardText}>{strings.Responses_Chart_NoAnswers}</div>;
     }
     // an ordered scale reads as a one-hue ramp, low to high
     const ramp = ordinalRamp(accent, theme.surface, 3, theme.isDark);
@@ -394,7 +435,7 @@ export const QuestionChart: React.FunctionComponent<IQuestionChartProps> = (prop
           { upTo: max, color: ramp[2] }
         ]}
         ink={ink}
-        caption={'Average of ' + stats.count}
+        caption={formatString(strings.Responses_Chart_AverageOf, { count: stats.count })}
         displayValue={String(stats.avg)}
       />
     );

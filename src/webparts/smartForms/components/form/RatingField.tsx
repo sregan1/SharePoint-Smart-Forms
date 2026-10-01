@@ -2,6 +2,8 @@ import * as React from 'react';
 import { Icon, IconButton } from '@fluentui/react';
 import styles from './FormRenderer.module.scss';
 import { RatingIcon } from '../../models';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 
 export interface IRatingFieldProps {
   value: number | undefined;
@@ -106,7 +108,7 @@ export const RatingField: React.FunctionComponent<IRatingFieldProps> = (props) =
       aria-valuemin={0}
       aria-valuemax={max}
       aria-valuenow={value}
-      aria-valuetext={value > 0 ? value + ' of ' + max : 'Not rated'}
+      aria-valuetext={value > 0 ? formatString(strings.Form_Rating_ValueText, { value, max }) : strings.Form_Rating_NotRated}
       aria-invalid={props.invalid ? true : undefined}
       aria-disabled={props.disabled ? true : undefined}
       tabIndex={props.disabled ? -1 : 0}
@@ -148,8 +150,8 @@ export const RatingField: React.FunctionComponent<IRatingFieldProps> = (props) =
         <IconButton
           className={styles.ratingClear}
           iconProps={{ iconName: 'Clear' }}
-          title="Clear rating"
-          ariaLabel="Clear rating"
+          title={strings.Form_Rating_Clear}
+          ariaLabel={strings.Form_Rating_Clear}
           tabIndex={-1}
           onClick={() => props.onChange(undefined)}
         />

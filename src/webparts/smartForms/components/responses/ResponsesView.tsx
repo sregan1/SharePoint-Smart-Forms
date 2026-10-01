@@ -1,4 +1,6 @@
 import * as React from 'react';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString, isRtlLocale } from '../../utils/localeUtils';
 import {
   CommandBar,
   Dropdown,
@@ -15,9 +17,11 @@ import {
 } from '@fluentui/react';
 import styles from './ResponsesView.module.scss';
 import {
+  FieldType,
   IDashboardSettings,
   IFormDefinition,
   IFormField,
+  IMessageBag,
   IResponseItem
 } from '../../models';
 import {
@@ -27,10 +31,11 @@ import {
   inputFields,
   segmentableFields
 } from '../../utils/formUtils';
-import { segmentBy } from '../../utils/analytics';
+import { matchesRowFilter, segmentBy } from '../../utils/analytics';
 import { IThemeInfo } from '../../utils/theme';
-import { SharePointService } from '../../services/SharePointService';
+import { ApprovalStatus, IResponseItemEx, SharePointService } from '../../services/SharePointService';
 import { debugLog, logError } from '../../utils/debug';
+import { IDrillTarget } from './QuestionChart';
 import { ResponseDetailPanel } from './ResponseDetailPanel';
 import { SummaryView } from './SummaryView';
 import { DashboardView } from './DashboardView';
@@ -47,18 +52,31 @@ export interface IResponsesViewProps {
   onDashboardChange?: (dashboard: IDashboardSettings) => void;
   onCopyShareLink?: () => void;
   onPreview?: () => void;
+  /** culture name (e.g. 'de-DE') for date/number formatting and RTL; supplied by the shell */
+  locale?: string;
+}
+
+const messages = strings as unknown as IMessageBag;
+const SEARCH_DEBOUNCE_MS = 250;
+const APPROVAL_BATCH = 5;
+
+type ApprovalFilter = '' | ApprovalStatus;
+
+interface IAnswerFilter {
+  fieldId: string;
+  row: IDrillTarget;
 }
 
 type ViewKey = 'dashboard' | 'summary' | 'table';
 
 type DateRange = 'all' | '7' | '30' | '90' | 'today';
 
-const DATE_RANGE_OPTIONS: IDropdownOption[] = [
-  { key: 'all', text: 'All time' },
-  { key: 'today', text: 'Today' },
-  { key: '7', text: 'Last 7 days' },
-  { key: '30', text: 'Last 30 days' },
-  { key: '90', text: 'Last 90 days' }
+const getDateRangeOptions = (): IDropdownOption[] => [
+  { key: 'all', text: strings.Responses_View_AllTime },
+  { key: 'today', text: strings.Responses_View_Today },
+  { key: '7', text: strings.Responses_View_Last7Days },
+  { key: '30', text: strings.Responses_View_Last30Days },
+  { key: '90', text: strings.Responses_View_Last90Days }
 ];
 
 /**
@@ -71,21 +89,34 @@ const DATE_RANGE_OPTIONS: IDropdownOption[] = [
  */
 export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (props) => {
   const { definition, listId, spService, theme } = props;
+  const approvalEnabled = definition.settings.enableApproval === true;
+  const dir = isRtlLocale(props.locale) ? 'rtl' : undefined;
 
   const [loading, setLoading] = React.useState<boolean>(true);
   const [error, setError] = React.useState<string>('');
-  const [items, setItems] = React.useState<IResponseItem[]>([]);
+  const [items, setItems] = React.useState<IResponseItemEx[]>([]);
   const [truncated, setTruncated] = React.useState<boolean>(false);
   const [view, setView] = React.useState<ViewKey>('dashboard');
+  const [notice, setNotice] = React.useState<string>('');
 
   // ----- shared filters -----
   const [search, setSearch] = React.useState<string>('');
+  const [debouncedSearch, setDebouncedSearch] = React.useState<string>('');
   const [dateRange, setDateRange] = React.useState<DateRange>('all');
   const [segmentFieldId, setSegmentFieldId] = React.useState<string>('');
-  const [segmentValue, setSegmentValue] = React.useState<string>('');
+  const [answerFilter, setAnswerFilter] = React.useState<IAnswerFilter | undefined>(undefined);
+  const [approvalFilter, setApprovalFilter] = React.useState<ApprovalFilter>('');
+
+  const segmentValue =
+    answerFilter && answerFilter.fieldId === segmentFieldId ? answerFilter.row.filterValue : undefined;
 
   const [selectedId, setSelectedId] = React.useState<number | undefined>(undefined);
   const [visibleColumns, setVisibleColumns] = React.useState<string[]>([]);
+
+  React.useEffect(() => {
+    const handle = window.setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [search]);
 
   const fields = React.useMemo(
     () => inputFields(definition).filter((f) => f.provisioned !== false),
@@ -100,6 +131,13 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
     [fields]
   );
 
+  // Searchable text is expensive (formats every answer), so compute it once per
+  // item object; a new load or optimistic update yields new objects and so a fresh entry.
+  const searchTextCache = React.useRef<{ key: string; map: WeakMap<IResponseItem, string> }>({
+    key: '',
+    map: new WeakMap()
+  });
+
   // A generation counter rather than a per-call `cancelled` flag: `load` is also
   // invoked from the Refresh button, where there is no effect teardown to flip a
   // local flag, so a slow first request could otherwise land after a fast retry
@@ -111,7 +149,7 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
     setLoading(true);
     setError('');
     spService
-      .getResponses(listId, definition)
+      .getResponses(listId, definition, { includeApproval: approvalEnabled })
       .then((page) => {
         if (generation !== loadGeneration.current) {
           return;
@@ -126,13 +164,11 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
           return;
         }
         logError('getResponses', error);
-        setError(
-          'Responses could not be loaded. Publish the form once so the list columns exist, then try again.'
-        );
+        setError(strings.Responses_View_LoadError);
         setLoading(false);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listId, definitionKey]);
+  }, [listId, definitionKey, approvalEnabled]);
 
   React.useEffect(() => {
     load();
@@ -141,7 +177,7 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
   // ----- filtering -----
 
   const filtered = React.useMemo(() => {
-    let result = items;
+    let result: IResponseItemEx[] = items;
 
     if (dateRange !== 'all') {
       const now = new Date();
@@ -153,59 +189,105 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
       result = result.filter((item) => item.created >= start);
     }
 
-    if (segmentFieldId && segmentValue) {
-      const field = filterableFields.filter((f) => f.id === segmentFieldId)[0];
+    if (answerFilter) {
+      const field = fields.filter((f) => f.id === answerFilter.fieldId)[0];
       if (field) {
-        const matching = segmentBy(field, result).filter((s) => s.label === segmentValue)[0];
-        result = matching ? matching.items : [];
+        result = result.filter((item) => matchesRowFilter(field, item, answerFilter.row));
       }
     }
 
-    const query = search.trim().toLowerCase();
+    if (approvalEnabled && approvalFilter) {
+      result = result.filter((item) => (item.approvalStatus || 'Pending') === approvalFilter);
+    }
+
+    const query = debouncedSearch.trim().toLowerCase();
     if (query) {
+      const cacheKey = definitionKey + '@' + (props.locale || '');
+      if (searchTextCache.current.key !== cacheKey) {
+        searchTextCache.current = { key: cacheKey, map: new WeakMap() };
+      }
+      const cache = searchTextCache.current.map;
       result = result.filter((item) => {
-        const haystack = [item.createdBy]
-          .concat(fields.map((f) => formatSharePointValue(f, item.values[f.internalName])))
-          .join(' ')
-          .toLowerCase();
+        let haystack = cache.get(item);
+        if (haystack === undefined) {
+          haystack = [item.createdBy]
+            .concat(
+              fields.map((f) => formatSharePointValue(f, item.values[f.internalName], messages, props.locale))
+            )
+            .join(' ')
+            .toLowerCase();
+          cache.set(item, haystack);
+        }
         return haystack.indexOf(query) !== -1;
       });
     }
 
     return result;
-  }, [items, search, dateRange, segmentFieldId, segmentValue, fields, filterableFields]);
+  }, [items, debouncedSearch, dateRange, answerFilter, approvalFilter, approvalEnabled, fields, definitionKey, props.locale]);
 
   const segmentValueOptions = React.useMemo(() => {
     const field = filterableFields.filter((f) => f.id === segmentFieldId)[0];
     if (!field) {
       return [];
     }
-    return segmentBy(field, items).map((segment) => ({
-      key: segment.label,
-      text: segment.label + ' (' + segment.items.length + ')'
+    return segmentBy(field, items, messages, props.locale).map((segment) => ({
+      key: segment.filterValue,
+      text: formatString(strings.Responses_View_SegmentOption, {
+        label: segment.label,
+        count: segment.items.length
+      }),
+      data: { label: segment.label, filterValue: segment.filterValue } as IDrillTarget
     }));
-  }, [filterableFields, segmentFieldId, items]);
+  }, [filterableFields, segmentFieldId, items, props.locale]);
 
-  const filtersActive = dateRange !== 'all' || !!segmentValue || search.trim().length > 0;
+  const filtersActive =
+    dateRange !== 'all' ||
+    !!answerFilter ||
+    search.trim().length > 0 ||
+    (approvalEnabled && approvalFilter !== '');
 
   const clearFilters = (): void => {
     setSearch('');
+    setDebouncedSearch('');
     setDateRange('all');
     setSegmentFieldId('');
-    setSegmentValue('');
+    setAnswerFilter(undefined);
+    setApprovalFilter('');
   };
 
   // ----- actions -----
 
   const handleExport = (): void => {
+    // buildCsv has no extra-column option, so approval data rides along as synthetic text columns
+    const approvalFields: IFormField[] = approvalEnabled
+      ? ([
+          { id: '__approvalStatus', internalName: '__approvalStatus', title: strings.Responses_Approval_Column },
+          { id: '__approvalReviewer', internalName: '__approvalReviewer', title: strings.Responses_Approval_ReviewerColumn },
+          { id: '__approvalComment', internalName: '__approvalComment', title: strings.Responses_Approval_CommentColumn }
+        ].map((f) => ({ ...f, type: FieldType.Text })) as IFormField[])
+      : [];
+    const statusText = (status?: ApprovalStatus): string =>
+      status === 'Approved'
+        ? strings.Responses_Approval_Approved
+        : status === 'Rejected'
+          ? strings.Responses_Approval_Rejected
+          : strings.Responses_Approval_Pending;
     const csv = buildCsv(
-      fields,
+      fields.concat(approvalFields),
       filtered.map((item) => ({
         id: item.id,
         created: item.created,
         createdBy: item.createdBy,
-        values: item.values
-      }))
+        values: approvalEnabled
+          ? {
+              ...item.values,
+              __approvalStatus: statusText(item.approvalStatus),
+              __approvalReviewer: item.reviewedBy || '',
+              __approvalComment: item.approvalComment || ''
+            }
+          : item.values
+      })),
+      { locale: props.locale, messages: messages }
     );
     const suffix = filtersActive ? '-filtered' : '';
     downloadTextFile(
@@ -217,8 +299,9 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
 
   const handleDeleteMany = async (toDelete: IResponseItem[]): Promise<void> => {
     const ids = toDelete.map((item) => item.id);
+    const idSet = new Set<number>(ids);
     await spService.deleteResponses(listId, ids);
-    setItems((prev) => prev.filter((item) => ids.indexOf(item.id) === -1));
+    setItems((prev) => prev.filter((item) => !idSet.has(item.id)));
     setSelectedId(undefined);
   };
 
@@ -228,17 +311,68 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
     setSelectedId(undefined);
   };
 
-  /** Clicking a chart segment narrows the table to that answer. */
-  const handleDrillDown = (field: IFormField, categoryLabel: string): void => {
-    const segmentable = filterableFields.filter((f) => f.id === field.id)[0];
-    if (segmentable && categoryLabel) {
-      setSegmentFieldId(field.id);
-      setSegmentValue(categoryLabel);
-    } else if (categoryLabel) {
-      // not a segmentable question — fall back to a text search
-      setSearch(categoryLabel);
+  /** Clicking a chart segment narrows every view to that answer. */
+  const handleDrillDown = (field: IFormField, target?: IDrillTarget): void => {
+    if (
+      target &&
+      (target.filterValue !== undefined || (target.filterValues && target.filterValues.length > 0))
+    ) {
+      setAnswerFilter({ fieldId: field.id, row: target });
+      setSegmentFieldId(filterableFields.filter((f) => f.id === field.id).length > 0 ? field.id : '');
+    } else if (target && target.label) {
+      // no stable answer key (e.g. a word from the word cloud): fall back to a text search
+      setSearch(target.label);
+      setDebouncedSearch(target.label);
     }
     setView('table');
+  };
+
+  /** Optimistic approval update; rolls back and rethrows on failure. */
+  const applyApproval = async (
+    target: IResponseItem,
+    status: ApprovalStatus,
+    comment: string
+  ): Promise<void> => {
+    const previous = items.filter((i) => i.id === target.id)[0];
+    const patch = (values: Partial<IResponseItemEx>): void =>
+      setItems((prev) => prev.map((i) => (i.id === target.id ? { ...i, ...values } : i)));
+    patch({
+      approvalStatus: status,
+      approvalComment: comment,
+      reviewedBy: status === 'Pending' ? '' : previous ? previous.reviewedBy : undefined
+    });
+    try {
+      await spService.setResponseApproval(listId, definition, target.id, status, comment, {
+        notifyRespondent: definition.settings.approvalNotify === true,
+        locale: props.locale
+      });
+    } catch (e) {
+      logError('setResponseApproval', e);
+      if (previous) {
+        patch({
+          approvalStatus: previous.approvalStatus,
+          approvalComment: previous.approvalComment,
+          reviewedBy: previous.reviewedBy
+        });
+      }
+      throw e;
+    }
+  };
+
+  const handleBulkApproval = async (targets: IResponseItem[], status: ApprovalStatus): Promise<void> => {
+    let failed = 0;
+    for (let i = 0; i < targets.length; i += APPROVAL_BATCH) {
+      const results = await Promise.all(
+        targets.slice(i, i + APPROVAL_BATCH).map((t) =>
+          applyApproval(t, status, '').then(
+            () => true,
+            () => false
+          )
+        )
+      );
+      failed += results.filter((ok) => !ok).length;
+    }
+    setNotice(failed > 0 ? formatString(strings.Responses_Approval_BulkFailed, { count: failed }) : '');
   };
 
   const selectedIndex = filtered.map((item) => item.id).indexOf(selectedId as number);
@@ -246,19 +380,19 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
 
   if (loading) {
     return (
-      <div className={styles.centered}>
-        <Spinner size={SpinnerSize.large} label="Loading responses…" />
+      <div className={styles.centered} dir={dir}>
+        <Spinner size={SpinnerSize.large} label={strings.Responses_View_Loading} />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className={styles.responses}>
+      <div className={styles.responses} dir={dir}>
         <MessageBar
           messageBarType={MessageBarType.warning}
           actions={
-            <PrimaryButton text="Try again" onClick={load} />
+            <PrimaryButton text={strings.Responses_View_TryAgain} onClick={load} />
           }
         >
           {error}
@@ -268,17 +402,17 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
   }
 
   return (
-    <div className={styles.responses}>
+    <div className={styles.responses} dir={dir}>
       <div className={styles.toolbar}>
         <Pivot
           headersOnly={true}
           selectedKey={view}
           onLinkClick={(item) => item && setView(item.props.itemKey as ViewKey)}
         >
-          <PivotItem headerText="Dashboard" itemKey="dashboard" itemIcon="ViewDashboard" />
-          <PivotItem headerText="Summary" itemKey="summary" itemIcon="BarChartVertical" />
+          <PivotItem headerText={strings.Responses_View_Dashboard} itemKey="dashboard" itemIcon="ViewDashboard" />
+          <PivotItem headerText={strings.Responses_View_Summary} itemKey="summary" itemIcon="BarChartVertical" />
           <PivotItem
-            headerText={'Responses (' + filtered.length + ')'}
+            headerText={formatString(strings.Responses_View_ResponsesTab, { count: filtered.length })}
             itemKey="table"
             itemIcon="Table"
           />
@@ -288,7 +422,7 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
           items={[
             {
               key: 'refresh',
-              text: 'Refresh',
+              text: strings.Responses_View_Refresh,
               iconProps: { iconName: 'Refresh' },
               onClick: () => {
                 load();
@@ -296,21 +430,31 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
             },
             {
               key: 'export',
-              text: 'Export CSV',
+              text: strings.Responses_View_ExportCsv,
               iconProps: { iconName: 'ExcelDocument' },
               disabled: filtered.length === 0,
               onClick: handleExport
             }
           ]}
-          overflowButtonProps={{ ariaLabel: 'More response actions' }}
+          overflowButtonProps={{ ariaLabel: strings.Responses_View_MoreActions }}
         />
       </div>
 
+      {notice && (
+        <MessageBar
+          messageBarType={MessageBarType.warning}
+          className={styles.noticeBar}
+          onDismiss={() => setNotice('')}
+        >
+          {notice}
+        </MessageBar>
+      )}
+
       {truncated && (
         <MessageBar messageBarType={MessageBarType.info} className={styles.truncationNote}>
-          This list has more responses than Smart Forms loads at once. The newest{' '}
-          {items.length.toLocaleString()} are shown — open the list in Microsoft Lists for the
-          complete set.
+          {formatString(strings.Responses_View_Truncated, {
+            count: items.length.toLocaleString(props.locale)
+          })}
         </MessageBar>
       )}
 
@@ -318,77 +462,110 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
       <div className={styles.filterBar}>
         <SearchBox
           className={styles.filterSearch}
-          placeholder="Search all answers"
+          placeholder={strings.Responses_View_SearchPlaceholder}
           value={search}
           onChange={(_e, v) => setSearch(v || '')}
-          onClear={() => setSearch('')}
+          onClear={() => {
+            setSearch('');
+            setDebouncedSearch('');
+          }}
         />
         <Dropdown
           className={styles.filterDropdown}
-          options={DATE_RANGE_OPTIONS}
+          options={getDateRangeOptions()}
           selectedKey={dateRange}
-          ariaLabel="Date range"
+          ariaLabel={strings.Responses_View_DateRange}
           onChange={(_e, option) => option && setDateRange(String(option.key) as DateRange)}
         />
         {filterableFields.length > 0 && (
           <Dropdown
             className={styles.filterDropdown}
-            placeholder="Filter by answer"
-            options={[{ key: '', text: 'Any answer' }].concat(
-              filterableFields.map((f) => ({ key: f.id, text: f.title || 'Untitled' }))
+            placeholder={strings.Responses_View_FilterByAnswer}
+            options={[{ key: '', text: strings.Responses_View_AnyAnswer }].concat(
+              filterableFields.map((f) => ({ key: f.id, text: f.title || strings.Responses_View_Untitled }))
             )}
             selectedKey={segmentFieldId}
-            ariaLabel="Filter by question"
+            ariaLabel={strings.Responses_View_FilterByQuestion}
             onChange={(_e, option) => {
               setSegmentFieldId(option ? String(option.key) : '');
-              setSegmentValue('');
+              setAnswerFilter(undefined);
             }}
           />
         )}
         {segmentFieldId && (
           <Dropdown
             className={styles.filterDropdown}
-            placeholder="Select a value"
+            placeholder={strings.Responses_View_SelectValue}
             options={segmentValueOptions}
-            selectedKey={segmentValue || null}
-            ariaLabel="Filter value"
-            onChange={(_e, option) => setSegmentValue(option ? String(option.key) : '')}
+            selectedKey={segmentValue === undefined ? null : segmentValue}
+            ariaLabel={strings.Responses_View_FilterValue}
+            onChange={(_e, option) =>
+              option
+                ? setAnswerFilter({ fieldId: segmentFieldId, row: option.data as IDrillTarget })
+                : setAnswerFilter(undefined)
+            }
+          />
+        )}
+        {answerFilter && segmentValue === undefined && (
+          <span className={styles.filterChip}>
+            <Icon iconName="Filter" /> {answerFilter.row.label}
+          </span>
+        )}
+        {approvalEnabled && (
+          <Dropdown
+            className={styles.filterDropdown}
+            options={[
+              { key: '', text: strings.Responses_Approval_AnyStatus },
+              { key: 'Pending', text: strings.Responses_Approval_Pending },
+              { key: 'Approved', text: strings.Responses_Approval_Approved },
+              { key: 'Rejected', text: strings.Responses_Approval_Rejected }
+            ]}
+            selectedKey={approvalFilter}
+            ariaLabel={strings.Responses_Approval_FilterLabel}
+            onChange={(_e, option) => option && setApprovalFilter(String(option.key) as ApprovalFilter)}
           />
         )}
         {filtersActive && (
           <PrimaryButton
             iconProps={{ iconName: 'ClearFilter' }}
-            text="Clear"
+            text={strings.Responses_View_Clear}
             onClick={clearFilters}
           />
         )}
         <span className={styles.filterCount}>
           {filtered.length === items.length
-            ? items.length + (items.length === 1 ? ' response' : ' responses')
-            : filtered.length + ' of ' + items.length + ' responses'}
+            ? formatString(
+                items.length === 1
+                  ? strings.Responses_View_CountOne
+                  : strings.Responses_View_CountOther,
+                { count: items.length }
+              )
+            : formatString(strings.Responses_View_CountFiltered, {
+                shown: filtered.length,
+                total: items.length
+              })}
         </span>
       </div>
 
       {items.length === 0 ? (
         <div className={styles.empty}>
           <Icon iconName="Inbox" className={styles.emptyIcon} />
-          <div className={styles.emptyTitle}>No responses yet</div>
+          <div className={styles.emptyTitle}>{strings.Responses_View_EmptyTitle}</div>
           <p className={styles.emptyBody}>
-            Share the form to start collecting. Answers are saved to &ldquo;{props.listTitle}&rdquo;
-            and appear here straight away.
+            {formatString(strings.Responses_View_EmptyBody, { list: props.listTitle })}
           </p>
           <div className={styles.emptyActions}>
             {props.onCopyShareLink && (
               <PrimaryButton
                 iconProps={{ iconName: 'Link' }}
-                text="Copy share link"
+                text={strings.Responses_View_CopyShareLink}
                 onClick={props.onCopyShareLink}
               />
             )}
             {props.onPreview && (
               <PrimaryButton
                 iconProps={{ iconName: 'View' }}
-                text="Preview the form"
+                text={strings.Responses_View_PreviewForm}
                 onClick={props.onPreview}
               />
             )}
@@ -402,6 +579,7 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
               items={filtered}
               theme={theme}
               canEdit={props.isOwner}
+              locale={props.locale}
               onSettingsChange={props.onDashboardChange}
               onDrillDown={handleDrillDown}
             />
@@ -412,6 +590,7 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
               definition={definition}
               items={filtered}
               theme={theme}
+              locale={props.locale}
               onDrillDown={handleDrillDown}
             />
           )}
@@ -425,6 +604,9 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
               onOpen={(item) => setSelectedId(item.id)}
               onDeleteMany={handleDeleteMany}
               canDelete={props.isOwner}
+              locale={props.locale}
+              approvalEnabled={approvalEnabled && props.isOwner}
+              onBulkApproval={handleBulkApproval}
             />
           )}
         </>
@@ -439,6 +621,9 @@ export const ResponsesView: React.FunctionComponent<IResponsesViewProps> = (prop
           canDelete={props.isOwner}
           index={selectedIndex}
           total={filtered.length}
+          locale={props.locale}
+          approvalEnabled={approvalEnabled && props.isOwner}
+          onSetApproval={applyApproval}
           onNavigate={(delta) => {
             const next = filtered[selectedIndex + delta];
             if (next) {

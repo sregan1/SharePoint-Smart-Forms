@@ -29,6 +29,8 @@ import { SharePointService } from './services/SharePointService';
 import { SmartForms } from './components/SmartForms';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { debugLog, logError } from './utils/debug';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString, getEffectiveLocale } from './utils/localeUtils';
 
 export interface ISmartFormsWebPartProps {
   listId: string;
@@ -98,6 +100,8 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
         spService: this.spService,
         isEditMode: this.displayMode === DisplayMode.Edit,
         theme: this.currentTheme,
+        locale: getEffectiveLocale(this.context),
+        shareBaseUrl: this.getTeamsShareBaseUrl(),
         onConfigure: () => this.context.propertyPane.open(),
         onFormDefinitionChange: (definitionJson: string) => {
           // kept as a lightweight mirror on the page property (useful if the
@@ -109,6 +113,27 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
     );
 
     ReactDom.render(element, this.domElement);
+  }
+
+  /**
+   * Inside Microsoft Teams the web part runs in an iframe whose window.location is
+   * a Teams/SharePoint wrapper URL, not the page a respondent should open. Build
+   * the real SharePoint page URL instead. Undefined outside Teams (the shell then
+   * uses window.location as before).
+   */
+  private getTeamsShareBaseUrl(): string | undefined {
+    try {
+      if (!this.context.sdks || !this.context.sdks.microsoftTeams) {
+        return undefined;
+      }
+      const path = this.context.pageContext.site.serverRequestPath;
+      if (!path) {
+        return undefined;
+      }
+      return new URL(this.context.pageContext.web.absoluteUrl).origin + path;
+    } catch {
+      return undefined;
+    }
   }
 
   protected onDispose(): void {
@@ -148,7 +173,7 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
         logError('getAvailableLists', error);
         this.availableLists = [];
         this.listsLoaded = true;
-        this.createListStatus = 'The lists on this site could not be loaded.';
+        this.createListStatus = strings.PropertyPane_ListsLoadFailed;
         this.context.propertyPane.refresh();
       });
   }
@@ -167,11 +192,11 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
   private onCreateListClick = (): void => {
     const name = (this.properties.newListName || '').trim();
     if (!name) {
-      this.createListStatus = 'Enter a name for the new list first.';
+      this.createListStatus = strings.PropertyPane_EnterListName;
       this.context.propertyPane.refresh();
       return;
     }
-    this.createListStatus = 'Creating "' + name + '"…';
+    this.createListStatus = formatString(strings.PropertyPane_CreatingList, { name });
     this.context.propertyPane.refresh();
 
     this.spService
@@ -182,7 +207,7 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
         this.availableLists = this.availableLists
           .concat([{ key: list.id, text: list.title }])
           .sort((a, b) => String(a.text).localeCompare(String(b.text)));
-        this.createListStatus = 'List "' + list.title + '" created and selected.';
+        this.createListStatus = formatString(strings.PropertyPane_ListCreated, { title: list.title });
         this.context.propertyPane.refresh();
         this.render();
       })
@@ -191,8 +216,8 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
           logError('createList', e);
         }
         this.createListStatus = this.spService.isDuplicateListNameError(e)
-          ? 'A list named "' + name + '" already exists — select it from the dropdown above.'
-          : 'Could not create the list. Check that you have permission to create lists on this site.';
+          ? formatString(strings.PropertyPane_ListAlreadyExists, { name })
+          : strings.PropertyPane_CreateListFailed;
         this.context.propertyPane.refresh();
       });
   };
@@ -206,14 +231,14 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
         {
           header: {
             description:
-              'Choose the SharePoint list that stores form responses, or create a new one. Everything else — questions, appearance, notifications — is edited directly on the page.'
+              strings.PropertyPane_Description
           },
           groups: [
             {
-              groupName: 'Response list',
+              groupName: strings.PropertyPane_ResponseList_GroupName,
               groupFields: [
                 PropertyPaneDropdown('listId', {
-                  label: 'Save responses to this list',
+                  label: strings.PropertyPane_ListDropdown_Label,
                   options: this.availableLists,
                   selectedKey: this.properties.listId,
                   disabled: !this.listsLoaded
@@ -221,16 +246,16 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
                 PropertyPaneLabel('listStatus', {
                   text: this.listsLoaded
                     ? listSelected && selectedList
-                      ? 'Responses go to "' + selectedList.text + '".'
-                      : 'Pick a list, or create one below.'
-                    : 'Loading lists…'
+                      ? formatString(strings.PropertyPane_ResponsesGoTo, { name: String(selectedList.text) })
+                      : strings.PropertyPane_PickList
+                    : strings.PropertyPane_LoadingLists
                 }),
                 PropertyPaneTextField('newListName', {
-                  label: 'Or create a new list',
-                  placeholder: 'New list name'
+                  label: strings.PropertyPane_NewListName_Label,
+                  placeholder: strings.PropertyPane_NewListName_Placeholder
                 }),
                 PropertyPaneButton('createList', {
-                  text: 'Create list',
+                  text: strings.PropertyPane_CreateList_Button,
                   buttonType: PropertyPaneButtonType.Primary,
                   icon: 'Add',
                   onClick: this.onCreateListClick
@@ -241,20 +266,20 @@ export default class SmartFormsWebPart extends BaseClientSideWebPart<ISmartForms
               ]
             },
             {
-              groupName: 'Tips',
+              groupName: strings.PropertyPane_Tips_GroupName,
               isCollapsed: true,
               groupFields: [
                 PropertyPaneLabel('tipPublish', {
                   text:
-                    'Questions and settings save automatically as you edit them — no need to save or publish the page.'
+                    strings.PropertyPane_Tip_AutoSave
                 }),
                 PropertyPaneLabel('tipPermissions', {
                   text:
-                    'Respondents need permission to add items to the response list. Check the list permissions if someone reports an error when submitting.'
+                    strings.PropertyPane_Tip_Permissions
                 }),
                 PropertyPaneLabel('tipShare', {
                   text:
-                    'Use "Collect responses" on the page to create the list columns and get a shareable fill-in link.'
+                    strings.PropertyPane_Tip_Share
                 })
               ]
             }

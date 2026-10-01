@@ -2,6 +2,8 @@ import * as React from 'react';
 import { Icon, IconButton } from '@fluentui/react';
 import styles from './FormRenderer.module.scss';
 import { reorder, useDragList } from '../../hooks/useDragList';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 
 export interface IRankingFieldProps {
   /** options in their designed order */
@@ -32,7 +34,7 @@ export const RankingField: React.FunctionComponent<IRankingFieldProps> = (props)
   const applyMove = (from: number, to: number): void => {
     const next = reorder(order, from, to);
     props.onChange(next);
-    setAnnouncement(next[to] + ' moved to position ' + (to + 1) + ' of ' + next.length);
+    setAnnouncement(formatString(strings.Form_Ranking_Moved, { item: next[to], position: to + 1, total: next.length }));
   };
 
   const drag = useDragList({
@@ -70,15 +72,15 @@ export const RankingField: React.FunctionComponent<IRankingFieldProps> = (props)
               <span className={styles.rankButtons}>
                 <IconButton
                   iconProps={{ iconName: 'Up' }}
-                  title="Move up"
-                  ariaLabel={'Move ' + option + ' up'}
+                  title={strings.Form_Ranking_MoveUp}
+                  ariaLabel={formatString(strings.Form_Ranking_MoveItemUpAria, { item: option })}
                   disabled={index === 0}
                   onClick={() => applyMove(index, index - 1)}
                 />
                 <IconButton
                   iconProps={{ iconName: 'Down' }}
-                  title="Move down"
-                  ariaLabel={'Move ' + option + ' down'}
+                  title={strings.Form_Ranking_MoveDown}
+                  ariaLabel={formatString(strings.Form_Ranking_MoveItemDownAria, { item: option })}
                   disabled={index === order.length - 1}
                   onClick={() => applyMove(index, index + 1)}
                 />

@@ -3,13 +3,13 @@
   "solution": {
     "name": "SharePoint Smart Forms",
     "id": "e2294209-3c09-48f7-9716-365a26e5bdb7",
-    "version": "1.0.0.0",
+    "version": "1.1.0.0",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
     "developer": {
       "name": "Sean Regan, Vivity Consulting",
-      "websiteUrl": "",
+      "websiteUrl": "https://github.com/sregan1/SharePoint-Smart-Forms",
       "privacyUrl": "",
       "termsOfUseUrl": "",
       "mpnId": "Undefined-1.20.0"
@@ -19,7 +19,7 @@
         "default": "Beautiful, feature-rich forms for SharePoint lists"
       },
       "longDescription": {
-        "default": "Smart Forms replaces the out-of-the-box SharePoint list form with a modern, designer-built form experience: 17 field types, sections, multi-step wizard mode, conditional logic, validation, automatic column provisioning, and rich response views for list owners."
+        "default": "Smart Forms replaces the out-of-the-box SharePoint list form with a modern, designer-built form experience: 24 question types, sections, multi-step wizard mode, conditional logic, validation, automatic column provisioning, response editing and approval, version history, 30 languages, and rich response views for list owners."
       },
       "screenshotPaths": [],
       "videoUrl": "",
@@ -30,7 +30,7 @@
         "title": "SharePoint Smart Forms Feature",
         "description": "Deploys the Smart Forms web part",
         "id": "889a9712-a18a-4624-9173-4affaaf00b31",
-        "version": "1.0.0.0"
+        "version": "1.1.0.0"
       }
     ]
   },

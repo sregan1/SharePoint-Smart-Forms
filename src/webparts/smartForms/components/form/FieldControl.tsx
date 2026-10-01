@@ -16,8 +16,11 @@ import {
   IFormFile,
   IHyperlinkValue,
   ILikertValue,
+  IMessageBag,
   IPersonInfo
 } from '../../models';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 import { SharePointService } from '../../services/SharePointService';
 import { effectiveChoices, formatValue, shuffleWithSeed } from '../../utils/formUtils';
 import { PersonField } from './PersonField';
@@ -217,7 +220,7 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
       // never editable — the formula owns the value
       return (
         <div className={styles.readOnlyValue} id={controlId} aria-describedby={describedBy}>
-          {value === undefined || value === null ? '—' : formatValue(field, value)}
+          {value === undefined || value === null ? '—' : formatValue(field, value, strings as unknown as IMessageBag)}
         </div>
       );
 
@@ -230,7 +233,7 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
           <DatePicker
             id={controlId}
             value={current}
-            placeholder={field.placeholder || 'Select a date'}
+            placeholder={field.placeholder || strings.Form_Field_DatePlaceholder}
             allowTextInput={true}
             disabled={disabled}
             ariaLabel={ariaLabel}
@@ -263,7 +266,7 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
                 value={current}
                 stepMinutes={field.timeStepMinutes || 15}
                 disabled={disabled || !current}
-                ariaLabel={ariaLabel ? ariaLabel + ' — time' : 'Time'}
+                ariaLabel={ariaLabel ? formatString(strings.Form_Field_TimeAriaWithLabel, { label: ariaLabel }) : strings.Form_Field_TimeAria}
                 invalid={invalid}
                 onChange={(next) => {
                   if (!next || !current) {
@@ -302,7 +305,7 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
       // short, fall back to a dropdown for long lists. Forms that explicitly
       // chose a display keep it.
       const display = field.choiceDisplay || (choices.length <= 6 ? 'buttons' : 'dropdown');
-      const otherLabel = field.otherLabel || 'Other';
+      const otherLabel = field.otherLabel || strings.Form_Field_OtherDefault;
 
       if (field.allowMultiple) {
         const selected = Array.isArray(value) ? (value as string[]) : [];
@@ -345,7 +348,7 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
                 multiSelect={true}
                 options={choices.map((c, i) => ({ key: c, text: c, index: i }))}
                 selectedKeys={known}
-                placeholder={field.placeholder || 'Select options'}
+                placeholder={field.placeholder || strings.Form_Field_SelectOptionsPlaceholder}
                 disabled={disabled}
                 ariaLabel={ariaLabel}
                 aria-describedby={describedBy}
@@ -377,9 +380,9 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
                   <TextField
                     className={styles.otherInput}
                     value={otherValue === otherLabel ? '' : otherValue}
-                    placeholder="Please specify"
+                    placeholder={strings.Form_Field_PleaseSpecify}
                     disabled={disabled}
-                    ariaLabel={otherLabel + ' — please specify'}
+                    ariaLabel={formatString(strings.Form_Field_OtherSpecifyAria, { label: otherLabel })}
                     onChange={(_event, v) => onChange(known.concat([v || otherLabel]))}
                   />
                 )}
@@ -424,7 +427,7 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
               id={controlId}
               options={groupOptions}
               selectedKey={isOther ? otherLabel : selectedValue || null}
-              placeholder={field.placeholder || 'Select an option'}
+              placeholder={field.placeholder || strings.Form_Field_SelectOptionPlaceholder}
               disabled={disabled}
               ariaLabel={ariaLabel}
               aria-describedby={describedBy}
@@ -437,9 +440,9 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
               <TextField
                 className={styles.otherInput}
                 value={selectedValue === otherLabel ? '' : selectedValue}
-                placeholder="Please specify"
+                placeholder={strings.Form_Field_PleaseSpecify}
                 disabled={disabled}
-                ariaLabel={otherLabel + ' — please specify'}
+                ariaLabel={formatString(strings.Form_Field_OtherSpecifyAria, { label: otherLabel })}
                 onChange={(_event, v) => onChange(v || otherLabel)}
               />
             </div>
@@ -485,8 +488,8 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
         <Toggle
           id={controlId}
           checked={value === true}
-          onText="Yes"
-          offText="No"
+          onText={strings.Form_Field_Yes}
+          offText={strings.Form_Field_No}
           disabled={disabled}
           ariaLabel={ariaLabel}
           onChange={(_event, checked) => onChange(checked === true)}
@@ -497,7 +500,7 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
       return (
         <ConsentField
           consentText={field.consentText || ''}
-          label={field.placeholder || 'I agree'}
+          label={field.placeholder || strings.Form_Consent_DefaultLabel}
           checked={value === true}
           disabled={disabled}
           ariaDescribedBy={describedBy}
@@ -560,7 +563,7 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
             onChange={(v) => onChange(v)}
           />
           {!answered && !disabled && (
-            <div className={styles.selectionHint}>Drag the slider to answer</div>
+            <div className={styles.selectionHint}>{strings.Form_Field_SliderHint}</div>
           )}
         </div>
       );
@@ -604,16 +607,16 @@ export const FieldControl: React.FunctionComponent<IFieldControlProps> = (props)
             iconProps={{ iconName: 'Link' }}
             disabled={disabled}
             type="url"
-            ariaLabel={ariaLabel ? ariaLabel + ' — web address' : 'Web address'}
+            ariaLabel={ariaLabel ? formatString(strings.Form_Field_WebAddressAriaWithLabel, { label: ariaLabel }) : strings.Form_Field_WebAddressAria}
             aria-describedby={describedBy}
             aria-invalid={invalid ? true : undefined}
             onChange={(_event, v) => onChange({ ...link, url: v || '' })}
           />
           <TextField
             value={link.description || ''}
-            placeholder="Display text (optional)"
+            placeholder={strings.Form_Field_DisplayTextPlaceholder}
             disabled={disabled}
-            ariaLabel={ariaLabel ? ariaLabel + ' — display text' : 'Display text'}
+            ariaLabel={ariaLabel ? formatString(strings.Form_Field_DisplayTextAriaWithLabel, { label: ariaLabel }) : strings.Form_Field_DisplayTextAria}
             onChange={(_event, v) => onChange({ ...link, description: v || '' })}
           />
         </div>
@@ -700,12 +703,12 @@ const selectionHint = (
 ): string => {
   const parts: string[] = [];
   if (typeof min === 'number' && typeof max === 'number') {
-    parts.push('Choose between ' + min + ' and ' + max);
+    parts.push(formatString(strings.Form_Field_ChooseBetween, { min, max }));
   } else if (typeof min === 'number') {
-    parts.push('Choose at least ' + min);
+    parts.push(formatString(strings.Form_Field_ChooseAtLeast, { min }));
   } else if (typeof max === 'number') {
-    parts.push('Choose up to ' + max);
+    parts.push(formatString(strings.Form_Field_ChooseUpTo, { max }));
   }
-  parts.push(count + ' selected');
+  parts.push(formatString(strings.Form_Field_SelectedCount, { count }));
   return parts.join(' · ');
 };

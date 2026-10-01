@@ -2,6 +2,8 @@ import * as React from 'react';
 import { TextField } from '@fluentui/react';
 import styles from './FormRenderer.module.scss';
 import { IAddressValue } from '../../models';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 
 export interface IAddressFieldProps {
   value: IAddressValue | string | undefined;
@@ -32,7 +34,8 @@ export const AddressField: React.FunctionComponent<IAddressFieldProps> = (props)
     props.onChange({ ...address, ...patch });
   };
 
-  const label = props.ariaLabel ? props.ariaLabel + ' — ' : '';
+  const aria = (part: string): string =>
+    props.ariaLabel ? formatString(strings.Form_Address_AriaWithLabel, { label: props.ariaLabel, part }) : part;
 
   return (
     <div
@@ -43,8 +46,8 @@ export const AddressField: React.FunctionComponent<IAddressFieldProps> = (props)
     >
       <TextField
         className={styles.addressWide}
-        placeholder="Street address"
-        ariaLabel={label + 'street address'}
+        placeholder={strings.Form_Address_StreetPlaceholder}
+        ariaLabel={aria(strings.Form_Address_StreetAria)}
         value={address.street || ''}
         disabled={props.disabled}
         required={props.required}
@@ -54,16 +57,16 @@ export const AddressField: React.FunctionComponent<IAddressFieldProps> = (props)
       />
       <TextField
         className={styles.addressWide}
-        placeholder="Apartment, suite, etc. (optional)"
-        ariaLabel={label + 'address line 2'}
+        placeholder={strings.Form_Address_Street2Placeholder}
+        ariaLabel={aria(strings.Form_Address_Street2Aria)}
         value={address.street2 || ''}
         disabled={props.disabled}
         autoComplete="address-line2"
         onChange={(_event, v) => set({ street2: v })}
       />
       <TextField
-        placeholder="City"
-        ariaLabel={label + 'city'}
+        placeholder={strings.Form_Address_CityPlaceholder}
+        ariaLabel={aria(strings.Form_Address_CityAria)}
         value={address.city || ''}
         disabled={props.disabled}
         required={props.required}
@@ -71,24 +74,24 @@ export const AddressField: React.FunctionComponent<IAddressFieldProps> = (props)
         onChange={(_event, v) => set({ city: v })}
       />
       <TextField
-        placeholder="State / county"
-        ariaLabel={label + 'state or county'}
+        placeholder={strings.Form_Address_StatePlaceholder}
+        ariaLabel={aria(strings.Form_Address_StateAria)}
         value={address.state || ''}
         disabled={props.disabled}
         autoComplete="address-level1"
         onChange={(_event, v) => set({ state: v })}
       />
       <TextField
-        placeholder="Postcode / ZIP"
-        ariaLabel={label + 'postcode'}
+        placeholder={strings.Form_Address_PostalCodePlaceholder}
+        ariaLabel={aria(strings.Form_Address_PostalCodeAria)}
         value={address.postalCode || ''}
         disabled={props.disabled}
         autoComplete="postal-code"
         onChange={(_event, v) => set({ postalCode: v })}
       />
       <TextField
-        placeholder="Country"
-        ariaLabel={label + 'country'}
+        placeholder={strings.Form_Address_CountryPlaceholder}
+        ariaLabel={aria(strings.Form_Address_CountryAria)}
         value={address.country || ''}
         disabled={props.disabled}
         autoComplete="country-name"

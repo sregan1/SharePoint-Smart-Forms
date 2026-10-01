@@ -62,6 +62,8 @@ const ALLOWED_ATTRIBUTES: { [tag: string]: string[] } = {
   A: ['href', 'title', 'target', 'rel']
 };
 
+const BACKSLASH = String.fromCharCode(92);
+
 /** URL schemes permitted in href values. */
 const SAFE_URL = /^(https?:\/\/|mailto:|tel:|\/|#)/i;
 
@@ -89,11 +91,16 @@ export const isSafeUrl = (value: string): boolean => {
     return false;
   }
   // reject javascript:, data:, vbscript: and any other unlisted scheme
+  // protocol-relative "//host" URLs leave the site: allow only a single leading slash
+  if (cleaned.indexOf('//') === 0 || cleaned.indexOf('/' + BACKSLASH) === 0) {
+    return false;
+  }
   return SAFE_URL.test(cleaned);
 };
 
 const stripAttributes = (element: Element): void => {
-  const allowed = ALLOWED_ATTRIBUTES[element.tagName] || [];
+  const tagUpper = (element.tagName || '').toUpperCase();
+  const allowed = ALLOWED_ATTRIBUTES[tagUpper] || [];
   // copy the list first — removing while iterating a live NamedNodeMap skips entries
   const names: string[] = [];
   for (let i = 0; i < element.attributes.length; i++) {
@@ -109,7 +116,7 @@ const stripAttributes = (element: Element): void => {
       element.removeAttribute(name);
     }
   });
-  if (element.tagName === 'A' && element.getAttribute('href')) {
+  if (tagUpper === 'A' && element.getAttribute('href')) {
     // links from untrusted content open safely
     element.setAttribute('rel', 'noopener noreferrer');
   }
@@ -148,7 +155,8 @@ const cleanNode = (node: Node): void => {
       return;
     }
     const element = child as Element;
-    const tag = element.tagName;
+    // SVG/MathML elements report lowercase tag names, so compare upper-cased
+    const tag = (element.tagName || '').toUpperCase();
 
     if (DROP_SUBTREE_TAGS.indexOf(tag) !== -1) {
       if (element.parentNode) {

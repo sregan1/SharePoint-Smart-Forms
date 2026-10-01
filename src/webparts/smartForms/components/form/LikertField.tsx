@@ -1,6 +1,8 @@
 import * as React from 'react';
 import styles from './FormRenderer.module.scss';
 import { ILikertValue } from '../../models';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 
 export interface ILikertFieldProps {
   rows: string[];
@@ -67,7 +69,7 @@ export const LikertField: React.FunctionComponent<ILikertFieldProps> = (props) =
                       role="radio"
                       name={groupId + '-' + rowIndex}
                       aria-checked={checked}
-                      aria-label={row + ': ' + column}
+                      aria-label={formatString(strings.Form_Likert_RadioAria, { row, column })}
                       disabled={props.disabled}
                       tabIndex={checked || (!answers[row] && column === columns[0]) ? 0 : -1}
                       className={checked ? styles.likertRadio + ' ' + styles.likertRadioOn : styles.likertRadio}
@@ -96,7 +98,7 @@ export const LikertField: React.FunctionComponent<ILikertFieldProps> = (props) =
       </table>
       {answeredCount < rows.length && (
         <div className={props.invalid ? styles.likertMissing : styles.selectionHint}>
-          {answeredCount} of {rows.length} rows answered
+          {formatString(strings.Form_Likert_RowsAnswered, { answered: answeredCount, total: rows.length })}
         </div>
       )}
     </div>

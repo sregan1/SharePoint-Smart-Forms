@@ -2,6 +2,7 @@ import * as React from 'react';
 import { IPersonaProps, NormalPeoplePicker } from '@fluentui/react';
 import { IPersonInfo } from '../../models';
 import { SharePointService } from '../../services/SharePointService';
+import * as strings from 'SmartFormsWebPartStrings';
 
 export interface IPersonFieldProps {
   value: IPersonInfo[];
@@ -56,15 +57,15 @@ export const PersonField: React.FunctionComponent<IPersonFieldProps> = (props) =
       itemLimit={props.allowMultiple ? 20 : 1}
       disabled={props.disabled}
       inputProps={{
-        placeholder: hasValue ? '' : props.placeholder || 'Start typing a name…',
+        placeholder: hasValue ? '' : props.placeholder || strings.Form_Person_Placeholder,
         'aria-label': props.ariaLabel,
         'aria-describedby': props.ariaDescribedBy,
         'aria-invalid': props.invalid ? true : undefined
       }}
       pickerSuggestionsProps={{
-        suggestionsHeaderText: props.allowGroups ? 'Suggested people and groups' : 'Suggested people',
-        noResultsFoundText: props.allowGroups ? 'No people or groups found' : 'No people found',
-        loadingText: 'Searching…'
+        suggestionsHeaderText: props.allowGroups ? strings.Form_Person_SuggestedPeopleAndGroups : strings.Form_Person_SuggestedPeople,
+        noResultsFoundText: props.allowGroups ? strings.Form_Person_NoPeopleOrGroups : strings.Form_Person_NoPeople,
+        loadingText: strings.Form_Person_Searching
       }}
       resolveDelay={300}
     />

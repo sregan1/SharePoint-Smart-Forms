@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Checkbox } from '@fluentui/react';
 import styles from './FormRenderer.module.scss';
+import * as strings from 'SmartFormsWebPartStrings';
 import { sanitizeHtml } from '../../utils/sanitizeHtml';
 
 export interface IConsentFieldProps {
@@ -36,7 +37,7 @@ export const ConsentField: React.FunctionComponent<IConsentFieldProps> = (props)
         />
       )}
       <Checkbox
-        label={props.label || 'I agree'}
+        label={props.label || strings.Form_Consent_DefaultLabel}
         checked={props.checked === true}
         disabled={props.disabled}
         ariaDescribedBy={[html ? textId : '', props.ariaDescribedBy || ''].filter((v) => v).join(' ') || undefined}

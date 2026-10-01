@@ -1,4 +1,6 @@
 import * as React from 'react';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 import {
   ActionButton,
   ContextualMenuItemType,
@@ -26,33 +28,38 @@ import {
   npsStats,
   numericStats,
   suggestGrain,
-  timeline,
+  timelineDetailed,
   TimeGrain
 } from '../../utils/analytics';
 import { chartInk, IThemeInfo } from '../../utils/theme';
 import { AreaChart, formatCompact, StatTile } from '../charts/Charts';
-import { QuestionChart } from './QuestionChart';
+import { IDrillTarget, QuestionChart } from './QuestionChart';
+import { IResponseItemEx } from '../../services/SharePointService';
 
 export interface IDashboardViewProps {
   definition: IFormDefinition;
   items: IResponseItem[];
+  locale?: string;
   theme: IThemeInfo;
   /** owners can rearrange tiles; viewers get the saved layout read-only */
   canEdit: boolean;
   onSettingsChange?: (dashboard: IDashboardSettings) => void;
-  onDrillDown?: (field: IFormField, categoryLabel: string) => void;
+  onDrillDown?: (field: IFormField, target?: IDrillTarget) => void;
 }
 
-const CHART_LABELS: { [kind: string]: string } = {
-  auto: 'Automatic',
-  bar: 'Bars',
-  column: 'Columns',
-  donut: 'Donut',
-  stat: 'Statistics',
-  gauge: 'Gauge',
-  histogram: 'Histogram',
-  words: 'Word frequency',
-  table: 'Table'
+const chartLabel = (kind: string): string => {
+  const labels: { [kind: string]: string } = {
+    auto: strings.Responses_Dashboard_ChartAuto,
+    bar: strings.Responses_Dashboard_ChartBars,
+    column: strings.Responses_Dashboard_ChartColumns,
+    donut: strings.Responses_Dashboard_ChartDonut,
+    stat: strings.Responses_Dashboard_ChartStatistics,
+    gauge: strings.Responses_Dashboard_ChartGauge,
+    histogram: strings.Responses_Dashboard_ChartHistogram,
+    words: strings.Responses_Dashboard_ChartWordFrequency,
+    table: strings.Responses_Dashboard_ChartTable
+  };
+  return labels[kind] || kind;
 };
 
 const CHART_ICONS: { [kind: string]: string } = {
@@ -125,6 +132,13 @@ const interestScore = (field: IFormField, items: IResponseItem[]): number => {
   }
 };
 
+const grainLabel = (grain: TimeGrain): string =>
+  grain === 'month'
+    ? strings.Responses_Dashboard_ByMonth
+    : grain === 'week'
+      ? strings.Responses_Dashboard_ByWeek
+      : strings.Responses_Dashboard_ByDay;
+
 const AUTO_TILE_COUNT = 6;
 
 export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (props) => {
@@ -140,10 +154,26 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
   const fields = React.useMemo(() => inputFields(definition), [definition]);
   const questionCount = fields.length;
 
-  const kpis = React.useMemo(() => computeKpis(items, questionCount), [items, questionCount]);
+  const kpis = React.useMemo(() => computeKpis(items, questionCount, undefined, fields), [items, questionCount, fields]);
+
+  const approvalCounts = React.useMemo(() => {
+    const counts = { pending: 0, approved: 0, rejected: 0 };
+    (items as IResponseItemEx[]).forEach((item) => {
+      if (item.approvalStatus === 'Approved') {
+        counts.approved++;
+      } else if (item.approvalStatus === 'Rejected') {
+        counts.rejected++;
+      } else {
+        counts.pending++;
+      }
+    });
+    return counts;
+  }, [items]);
+  const fmtNumber = (n: number): string => n.toLocaleString(props.locale);
 
   const [grain, setGrain] = React.useState<TimeGrain>(() => settings.timelineGrain || suggestGrain(items));
-  const points = React.useMemo(() => timeline(items, grain), [items, grain]);
+  const timelineResult = React.useMemo(() => timelineDetailed(items, grain, props.locale), [items, grain, props.locale]);
+  const points = timelineResult.points;
 
   /** Tiles to render: pinned first, then the highest-scoring questions. */
   const tiles = React.useMemo(() => {
@@ -198,7 +228,7 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
     const isPinned = tiles.filter((t) => t.field.id === field.id && t.pinned).length > 0;
     const items: IContextualMenuItem[] = options.map((kind) => ({
       key: kind,
-      text: CHART_LABELS[kind] || kind,
+      text: chartLabel(kind),
       iconProps: { iconName: CHART_ICONS[kind] || 'BarChartVertical' },
       canCheck: true,
       checked: current === kind,
@@ -207,13 +237,13 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
     items.push({ key: 'div', itemType: ContextualMenuItemType.Divider });
     items.push({
       key: 'pin',
-      text: isPinned ? 'Unpin from dashboard' : 'Pin to dashboard',
+      text: isPinned ? strings.Responses_Dashboard_Unpin : strings.Responses_Dashboard_Pin,
       iconProps: { iconName: 'Pin' },
       onClick: () => patchTile(field.id, { pinned: !isPinned })
     });
     items.push({
       key: 'hide',
-      text: 'Hide from dashboard',
+      text: strings.Responses_Dashboard_Hide,
       iconProps: { iconName: 'Hide3' },
       onClick: () => patchTile(field.id, { hidden: true, pinned: false })
     });
@@ -224,10 +254,9 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
     return (
       <div className={styles.empty}>
         <Icon iconName="BarChartVertical" className={styles.emptyIcon} />
-        <div className={styles.emptyTitle}>No responses yet</div>
+        <div className={styles.emptyTitle}>{strings.Responses_Dashboard_EmptyTitle}</div>
         <p className={styles.emptyBody}>
-          Once people start answering, this dashboard fills in automatically — headline numbers, a
-          response timeline, and a chart for the questions worth watching.
+          {strings.Responses_Dashboard_EmptyBody}
         </p>
       </div>
     );
@@ -241,44 +270,68 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
         <div className={styles.dashboardSection}>
           <div className={styles.statRow}>
               <StatTile
-                label="Total responses"
+                label={strings.Responses_Dashboard_TotalResponses}
                 value={formatCompact(kpis.total)}
                 caption={
-                  kpis.lastResponse ? 'Latest ' + kpis.lastResponse.toLocaleDateString() : undefined
+                  kpis.lastResponse
+                    ? formatString(strings.Responses_Dashboard_LatestDate, {
+                        date: kpis.lastResponse.toLocaleDateString(props.locale)
+                      })
+                    : undefined
                 }
                 trend={kpis.trend}
                 trendColor={theme.accent}
                 hero={true}
               />
               <StatTile
-                label="Last 7 days"
+                label={strings.Responses_Dashboard_Last7Days}
                 value={String(kpis.last7)}
                 delta={deltaLast7}
-                caption={deltaLast7 === undefined ? 'No prior week to compare' : 'vs previous 7 days'}
+                caption={deltaLast7 === undefined
+                    ? strings.Responses_Dashboard_NoPriorWeek
+                    : strings.Responses_Dashboard_VsPrevious7Days}
               />
-              <StatTile label="Today" value={String(kpis.today)} caption="Since midnight" />
               <StatTile
-                label="Unique respondents"
+                label={strings.Responses_Dashboard_Today}
+                value={String(kpis.today)}
+                caption={strings.Responses_Dashboard_SinceMidnight}
+              />
+              <StatTile
+                label={strings.Responses_Dashboard_UniqueRespondents}
                 value={String(kpis.uniqueRespondents)}
                 caption={
                   kpis.uniqueRespondents < kpis.total
-                    ? kpis.total - kpis.uniqueRespondents + ' repeat responses'
-                    : 'One each'
+                    ? formatString(strings.Responses_Dashboard_RepeatResponses, {
+                        count: kpis.total - kpis.uniqueRespondents
+                      })
+                    : strings.Responses_Dashboard_OneEach
                 }
               />
+              {definition.settings.enableApproval === true && (
+                <StatTile
+                  label={strings.Responses_Dashboard_ApprovalStatus}
+                  value={fmtNumber(approvalCounts.pending)}
+                  upIsGood={false}
+                  caption={formatString(strings.Responses_Dashboard_ApprovalBreakdown, {
+                    pending: approvalCounts.pending,
+                    approved: approvalCounts.approved,
+                    rejected: approvalCounts.rejected
+                  })}
+                />
+              )}
               {kpis.completionRate !== undefined && (
                 <StatTile
-                  label="Questions answered"
+                  label={strings.Responses_Dashboard_QuestionsAnswered}
                   value={kpis.completionRate + '%'}
-                  caption="Averaged across responses"
+                  caption={strings.Responses_Dashboard_AveragedAcrossResponses}
                 />
               )}
               {kpis.medianDuration !== undefined && (
                 <StatTile
-                  label="Median time to complete"
+                  label={strings.Responses_Dashboard_MedianTimeToComplete}
                   value={formatDuration(kpis.medianDuration)}
                   upIsGood={false}
-                  caption="Recorded on submit"
+                  caption={strings.Responses_Dashboard_RecordedOnSubmit}
                 />
               )}
           </div>
@@ -288,12 +341,12 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
       {settings.showTimeline !== false && points.length > 1 && (
         <div className={styles.timelineCard}>
           <div className={styles.timelineHeader}>
-            <span className={styles.timelineTitle}>Responses over time</span>
+            <span className={styles.timelineTitle}>{strings.Responses_Dashboard_ResponsesOverTime}</span>
             <Dropdown
               options={[
-                { key: 'day', text: 'By day' },
-                { key: 'week', text: 'By week' },
-                { key: 'month', text: 'By month' }
+                { key: 'day', text: strings.Responses_Dashboard_ByDay },
+                { key: 'week', text: strings.Responses_Dashboard_ByWeek },
+                { key: 'month', text: strings.Responses_Dashboard_ByMonth }
               ]}
               selectedKey={grain}
               styles={{ root: { minWidth: 110 } }}
@@ -309,17 +362,26 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
               }}
             />
           </div>
+          {(timelineResult.grain !== grain || timelineResult.truncated) && (
+            <div className={styles.segmentNote} role="status">
+              {timelineResult.truncated
+                ? formatString(strings.Responses_Dashboard_TimelineTruncated, { count: points.length })
+                : formatString(strings.Responses_Dashboard_TimelineCoarsened, {
+                    grain: grainLabel(timelineResult.grain)
+                  })}
+            </div>
+          )}
           <AreaChart points={points} color={theme.accent} ink={ink} height={170} />
         </div>
       )}
 
       <div className={styles.dashboardSection}>
         <div className={styles.dashboardSectionHeader}>
-          <h4 className={styles.dashboardSectionTitle}>Highlights</h4>
+          <h4 className={styles.dashboardSectionTitle}>{strings.Responses_Dashboard_Highlights}</h4>
           {props.canEdit && (settings.tiles || []).filter((t) => t.hidden).length > 0 && (
             <ActionButton
               iconProps={{ iconName: 'RedEye' }}
-              text="Show hidden questions"
+              text={strings.Responses_Dashboard_ShowHidden}
               onClick={() =>
                 props.onSettingsChange &&
                 props.onSettingsChange({
@@ -349,19 +411,25 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
                   </span>
                   <div className={styles.summaryCardTitleGroup}>
                     <div className={styles.summaryCardTitle}>
-                      {tile.field.title || 'Untitled question'}
+                      {tile.field.title || strings.Responses_Dashboard_UntitledQuestion}
                     </div>
                     <div className={styles.summaryCardMeta}>
-                      {answeredCount(tile.field, items)} of {items.length} answered
-                      {tile.pinned ? ' · pinned' : ''}
+                      {formatString(
+                        tile.pinned
+                          ? strings.Responses_Dashboard_AnsweredOfPinned
+                          : strings.Responses_Dashboard_AnsweredOf,
+                        { answered: answeredCount(tile.field, items), total: items.length }
+                      )}
                     </div>
                   </div>
                   {props.canEdit && (
                     <div className={styles.summaryCardActions}>
                       <IconButton
                         iconProps={{ iconName: 'MoreVertical' }}
-                        title="Chart options"
-                        ariaLabel={'Chart options for ' + (tile.field.title || 'question')}
+                        title={strings.Responses_Dashboard_ChartOptions}
+                        ariaLabel={formatString(strings.Responses_Dashboard_ChartOptionsFor, {
+                          title: tile.field.title || strings.Responses_Dashboard_QuestionFallback
+                        })}
                         menuProps={chartMenu(tile.field, tile.chart)}
                         onRenderMenuIcon={() => null}
                       />
@@ -375,6 +443,7 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
                     chart={chart}
                     theme={theme}
                     compact={true}
+                    locale={props.locale}
                     onDrillDown={props.onDrillDown}
                   />
                 </div>
@@ -385,8 +454,7 @@ export const DashboardView: React.FunctionComponent<IDashboardViewProps> = (prop
 
         {tiles.length === 0 && (
           <div className={styles.emptyCardText}>
-            Every question is hidden from the dashboard. Use &ldquo;Show hidden questions&rdquo; to bring
-            them back.
+            {strings.Responses_Dashboard_AllHidden}
           </div>
         )}
       </div>

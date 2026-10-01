@@ -1,4 +1,5 @@
 import * as React from 'react';
+import * as strings from 'SmartFormsWebPartStrings';
 import { logError } from '../utils/debug';
 
 export interface IErrorBoundaryProps {
@@ -52,13 +53,13 @@ export class ErrorBoundary extends React.Component<IErrorBoundaryProps, IErrorBo
           margin: 8
         }}
       >
-        <strong style={{ color: '#c00', fontSize: 14 }}>Smart Forms — Render Error</strong>
+        <strong style={{ color: '#c00', fontSize: 14 }}>{strings.App_ErrorBoundary_Title}</strong>
         <br />
         <br />
-        <strong>Message:</strong> {error.message || String(error)}
+        <strong>{strings.App_ErrorBoundary_Message}</strong> {error.message || String(error)}
         <br />
         <br />
-        <strong>Stack:</strong>
+        <strong>{strings.App_ErrorBoundary_Stack}</strong>
         <pre
           style={{
             fontSize: 11,
@@ -70,10 +71,10 @@ export class ErrorBoundary extends React.Component<IErrorBoundaryProps, IErrorBo
             borderRadius: 2
           }}
         >
-          {error.stack || '(no stack available)'}
+          {error.stack || strings.App_ErrorBoundary_NoStack}
         </pre>
         <span style={{ fontSize: 11, color: '#666' }}>
-          Full details were also written to the browser console.
+          {strings.App_ErrorBoundary_ConsoleNote}
         </span>
       </div>
     );

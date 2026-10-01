@@ -1,4 +1,6 @@
 import * as React from 'react';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 import {
   CommandBar,
   ContextualMenuItemType,
@@ -20,6 +22,26 @@ import {
 import styles from './ResponsesView.module.scss';
 import { FieldType, IFormField, IResponseItem } from '../../models';
 import { formatSharePointValue } from '../../utils/formUtils';
+import { ApprovalStatus, IResponseItemEx } from '../../services/SharePointService';
+
+/** Chip for an approval status; anything unset reads as pending. */
+export const ApprovalChip: React.FunctionComponent<{ status?: ApprovalStatus }> = ({ status }) => {
+  const value: ApprovalStatus = status || 'Pending';
+  const cls =
+    value === 'Approved' ? styles.approvalApproved : value === 'Rejected' ? styles.approvalRejected : styles.approvalPending;
+  const text =
+    value === 'Approved'
+      ? strings.Responses_Approval_Approved
+      : value === 'Rejected'
+        ? strings.Responses_Approval_Rejected
+        : strings.Responses_Approval_Pending;
+  const icon = value === 'Approved' ? 'CheckMark' : value === 'Rejected' ? 'Cancel' : 'Clock';
+  return (
+    <span className={styles.approvalChip + ' ' + cls}>
+      <Icon iconName={icon} /> {text}
+    </span>
+  );
+};
 
 export interface IResponseTableProps {
   fields: IFormField[];
@@ -30,6 +52,10 @@ export interface IResponseTableProps {
   onOpen: (item: IResponseItem) => void;
   onDeleteMany: (items: IResponseItem[]) => Promise<void>;
   canDelete: boolean;
+  locale?: string;
+  /** show the approval column and bulk approve/reject */
+  approvalEnabled?: boolean;
+  onBulkApproval?: (items: IResponseItem[], status: ApprovalStatus) => Promise<void>;
 }
 
 type SortDirection = 'asc' | 'desc';
@@ -51,6 +77,7 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
   const [sortDirection, setSortDirection] = React.useState<SortDirection>('desc');
   const [selectedIds, setSelectedIds] = React.useState<number[]>([]);
   const [confirmingDelete, setConfirmingDelete] = React.useState<boolean>(false);
+  const [reviewing, setReviewing] = React.useState<boolean>(false);
   const [deleting, setDeleting] = React.useState<boolean>(false);
   const [columnPickerOpen, setColumnPickerOpen] = React.useState<boolean>(false);
 
@@ -88,6 +115,9 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
   const sortValue = (item: IResponseItem, key: string): string | number => {
     if (key === 'created') {
       return item.created.getTime();
+    }
+    if (key === 'approval') {
+      return ((item as IResponseItemEx).approvalStatus || 'Pending').toLowerCase();
     }
     if (key === 'createdBy') {
       return (item.createdBy || '').toLowerCase();
@@ -145,7 +175,7 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
   const systemColumns: IColumn[] = [
     {
       key: 'created',
-      name: 'Submitted',
+      name: strings.Responses_Table_Submitted,
       minWidth: 120,
       maxWidth: 165,
       isResizable: true,
@@ -157,15 +187,15 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
           type="button"
           className={styles.cellLink}
           onClick={() => props.onOpen(item)}
-          title="Open this response"
+          title={strings.Responses_Table_OpenResponse}
         >
-          {item.created.toLocaleString()}
+          {item.created.toLocaleString(props.locale)}
         </button>
       )
     },
     {
       key: 'createdBy',
-      name: 'Submitted by',
+      name: strings.Responses_Table_SubmittedBy,
       minWidth: 110,
       maxWidth: 170,
       isResizable: true,
@@ -174,15 +204,29 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
       onColumnClick: () => toggleSort('createdBy'),
       onRender: (item: IResponseItem) => (
         <span className={item.createdBy ? styles.cellText : styles.cellMuted}>
-          {item.createdBy || 'Unknown'}
+          {item.createdBy || strings.Responses_Table_Unknown}
         </span>
       )
     }
   ];
 
+  if (props.approvalEnabled) {
+    systemColumns.push({
+      key: 'approval',
+      name: strings.Responses_Approval_Column,
+      minWidth: 90,
+      maxWidth: 120,
+      isResizable: true,
+      isSorted: sortKey === 'approval',
+      isSortedDescending: sortKey === 'approval' && sortDirection === 'desc',
+      onColumnClick: () => toggleSort('approval'),
+      onRender: (item: IResponseItem) => <ApprovalChip status={(item as IResponseItemEx).approvalStatus} />
+    });
+  }
+
   const questionColumns: IColumn[] = shownFields.map((field) => ({
     key: field.internalName,
-    name: field.title || 'Untitled',
+    name: field.title || strings.Responses_Table_Untitled,
     minWidth: 110,
     isResizable: true,
     isMultiline: field.type === FieldType.MultilineText || field.type === FieldType.RichText,
@@ -201,7 +245,20 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
 
   const columns: IColumn[] = systemColumns.concat(questionColumns);
 
-  const selectedItems = items.filter((item) => selectedIds.indexOf(item.id) !== -1);
+  const selectedSet = React.useMemo(() => new Set<number>(selectedIds), [selectedIds]);
+  const selectedItems = items.filter((item) => selectedSet.has(item.id));
+
+  const handleBulkApproval = async (status: ApprovalStatus): Promise<void> => {
+    if (!props.onBulkApproval) {
+      return;
+    }
+    setReviewing(true);
+    try {
+      await props.onBulkApproval(selectedItems, status);
+    } finally {
+      setReviewing(false);
+    }
+  };
 
   const handleDelete = async (): Promise<void> => {
     setDeleting(true);
@@ -219,13 +276,13 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
     {
       key: 'header',
       itemType: ContextualMenuItemType.Header,
-      text: 'Show these questions'
+      text: strings.Responses_Table_ShowTheseQuestions
     }
   ];
   fields.forEach((field) => {
     columnMenuItems.push({
       key: field.internalName,
-      text: field.title || 'Untitled',
+      text: field.title || strings.Responses_Table_Untitled,
       canCheck: true,
       checked: visible.indexOf(field.internalName) !== -1,
       onClick: () => {
@@ -249,25 +306,28 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
           items={[
             {
               key: 'columns',
-              text: 'Columns (' + shownFields.length + '/' + fields.length + ')',
+              text: formatString(strings.Responses_Table_ColumnsCount, {
+                shown: shownFields.length,
+                total: fields.length
+              }),
               iconProps: { iconName: 'ColumnOptions' },
               subMenuProps: { items: columnMenuItems }
             },
             {
               key: 'all',
-              text: 'Show all',
+              text: strings.Responses_Table_ShowAll,
               iconProps: { iconName: 'CheckboxComposite' },
               onClick: () => props.onVisibleColumnsChange(fields.map((f) => f.internalName))
             },
             {
               key: 'reset',
-              text: 'Reset columns',
+              text: strings.Responses_Table_ResetColumns,
               iconProps: { iconName: 'Undo' },
               onClick: () => props.onVisibleColumnsChange([])
             },
             {
               key: 'reorder',
-              text: 'Reorder',
+              text: strings.Responses_Table_Reorder,
               iconProps: { iconName: 'Sort' },
               onClick: () => setColumnPickerOpen(true)
             }
@@ -278,17 +338,42 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
       {selectedIds.length > 0 && (
         <div className={styles.selectionBar} role="status">
           <Icon iconName="MultiSelect" />
-          {selectedIds.length} {selectedIds.length === 1 ? 'response' : 'responses'} selected
+          {formatString(
+            selectedIds.length === 1
+              ? strings.Responses_Table_SelectedOne
+              : strings.Responses_Table_SelectedOther,
+            { count: selectedIds.length }
+          )}
           <span className={styles.selectionSpacer} />
+          {props.approvalEnabled && props.onBulkApproval && (
+            <>
+              <DefaultButton
+                iconProps={{ iconName: 'CheckMark' }}
+                text={strings.Responses_Approval_ApproveSelected}
+                disabled={reviewing}
+                onClick={() => {
+                  void handleBulkApproval('Approved');
+                }}
+              />
+              <DefaultButton
+                iconProps={{ iconName: 'Cancel' }}
+                text={strings.Responses_Approval_RejectSelected}
+                disabled={reviewing}
+                onClick={() => {
+                  void handleBulkApproval('Rejected');
+                }}
+              />
+            </>
+          )}
           {props.canDelete && (
             <DefaultButton
               iconProps={{ iconName: 'Delete' }}
-              text="Delete selected"
+              text={strings.Responses_Table_DeleteSelected}
               onClick={() => setConfirmingDelete(true)}
             />
           )}
           <DefaultButton
-            text="Clear selection"
+            text={strings.Responses_Table_ClearSelection}
             onClick={() => {
               selection.setAllSelected(false);
               setSelectedIds([]);
@@ -300,8 +385,8 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
       {items.length === 0 ? (
         <div className={styles.empty}>
           <Icon iconName="Table" className={styles.emptyIcon} />
-          <div className={styles.emptyTitle}>Nothing to show</div>
-          <p className={styles.emptyBody}>No responses match the current filters.</p>
+          <div className={styles.emptyTitle}>{strings.Responses_Table_NothingToShow}</div>
+          <p className={styles.emptyBody}>{strings.Responses_Table_NoMatch}</p>
         </div>
       ) : (
         <div className={styles.tableWrap}>
@@ -310,14 +395,14 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
             columns={columns}
             layoutMode={DetailsListLayoutMode.justified}
             selection={selection}
-            selectionMode={props.canDelete ? SelectionMode.multiple : SelectionMode.none}
+            selectionMode={props.canDelete || props.approvalEnabled ? SelectionMode.multiple : SelectionMode.none}
             selectionPreservedOnEmptyClick={true}
             // Enter or double-click opens; the previous grid opened the panel on
             // mere focus change, which fired while arrowing through rows
             onItemInvoked={(item: IResponseItem) => props.onOpen(item)}
             getKey={(item: IResponseItem) => String(item.id)}
-            ariaLabelForSelectionColumn="Toggle selection"
-            checkButtonAriaLabel="Select this response"
+            ariaLabelForSelectionColumn={strings.Responses_Table_ToggleSelection}
+            checkButtonAriaLabel={strings.Responses_Table_SelectResponse}
             compact={false}
           />
         </div>
@@ -328,20 +413,28 @@ export const ResponseTable: React.FunctionComponent<IResponseTableProps> = (prop
         onDismiss={() => setConfirmingDelete(false)}
         dialogContentProps={{
           type: DialogType.normal,
-          title:
-            'Delete ' + selectedIds.length + (selectedIds.length === 1 ? ' response?' : ' responses?'),
-          subText: 'The list items move to the site recycle bin, so they can be restored from there.'
+          title: formatString(
+            selectedIds.length === 1
+              ? strings.Responses_Table_DeleteTitleOne
+              : strings.Responses_Table_DeleteTitleOther,
+            { count: selectedIds.length }
+          ),
+          subText: strings.Responses_Table_DeleteBody
         }}
       >
         <DialogFooter>
           <PrimaryButton
-            text={deleting ? 'Deleting…' : 'Delete'}
+            text={deleting ? strings.Responses_Table_Deleting : strings.Responses_Table_Delete}
             disabled={deleting}
             onClick={() => {
               void handleDelete();
             }}
           />
-          <DefaultButton text="Cancel" disabled={deleting} onClick={() => setConfirmingDelete(false)} />
+          <DefaultButton
+            text={strings.Responses_Table_Cancel}
+            disabled={deleting}
+            onClick={() => setConfirmingDelete(false)}
+          />
         </DialogFooter>
       </Dialog>
 
@@ -381,31 +474,31 @@ const ColumnOrderPanel: React.FunctionComponent<IColumnOrderPanelProps> = (props
 
   const titleFor = (internalName: string): string => {
     const field = props.fields.filter((f) => f.internalName === internalName)[0];
-    return field ? field.title || 'Untitled' : internalName;
+    return field ? field.title || strings.Responses_Table_Untitled : internalName;
   };
 
   return (
     <Panel
       isOpen={true}
       type={PanelType.smallFixedFar}
-      headerText="Column order"
+      headerText={strings.Responses_Table_ColumnOrder}
       onDismiss={props.onDismiss}
       isFooterAtBottom={true}
       onRenderFooterContent={() => (
         <div className={styles.panelFooter}>
           <PrimaryButton
-            text="Apply"
+            text={strings.Responses_Table_Apply}
             onClick={() => {
               props.onChange(order);
               props.onDismiss();
             }}
           />
-          <DefaultButton text="Cancel" onClick={props.onDismiss} />
+          <DefaultButton text={strings.Responses_Table_Cancel} onClick={props.onDismiss} />
         </div>
       )}
     >
       <p className={styles.segmentNote}>
-        Submitted and Submitted by always come first. Drag order applies to the question columns.
+        {strings.Responses_Table_OrderNote}
       </p>
       {order.map((internalName, index) => (
         <div key={internalName} className={styles.attachmentRow}>
@@ -414,22 +507,26 @@ const ColumnOrderPanel: React.FunctionComponent<IColumnOrderPanelProps> = (props
           </span>
           <DefaultButton
             iconProps={{ iconName: 'Up' }}
-            title="Move up"
-            ariaLabel={'Move ' + titleFor(internalName) + ' up'}
+            title={strings.Responses_Table_MoveUp}
+            ariaLabel={formatString(strings.Responses_Table_MoveUpFor, {
+              title: titleFor(internalName)
+            })}
             disabled={index === 0}
             onClick={() => move(index, -1)}
           />
           <DefaultButton
             iconProps={{ iconName: 'Down' }}
-            title="Move down"
-            ariaLabel={'Move ' + titleFor(internalName) + ' down'}
+            title={strings.Responses_Table_MoveDown}
+            ariaLabel={formatString(strings.Responses_Table_MoveDownFor, {
+              title: titleFor(internalName)
+            })}
             disabled={index === order.length - 1}
             onClick={() => move(index, 1)}
           />
         </div>
       ))}
       {order.length === 0 && (
-        <p className={styles.emptyCardText}>No question columns are visible yet.</p>
+        <p className={styles.emptyCardText}>{strings.Responses_Table_NoColumns}</p>
       )}
     </Panel>
   );

@@ -12,5 +12,7 @@
     }
   },
   "externals": {},
-  "localizedResources": {}
+  "localizedResources": {
+    "SmartFormsWebPartStrings": "lib/webparts/smartForms/loc/{locale}.js"
+  }
 }

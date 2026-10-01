@@ -62,6 +62,33 @@ export const formulaReferences = (formula: string): string[] => {
 };
 
 /**
+ * Render a finite number as a plain decimal, never in exponent form
+ * (String(1e-7) is "1e-7", which the tokenizer would otherwise misread).
+ */
+export const plainDecimal = (value: number): string => {
+  const text = String(value);
+  if (!/e/i.test(text)) {
+    return text;
+  }
+  const negative = value < 0;
+  const match = /^(\d+)(?:\.(\d+))?e([+-]\d+)$/i.exec(String(Math.abs(value)));
+  if (!match) {
+    return value.toFixed(20).replace(/\.?0+$/, '');
+  }
+  const digits = match[1] + (match[2] || '');
+  const pointIndex = match[1].length + parseInt(match[3], 10);
+  let result: string;
+  if (pointIndex <= 0) {
+    result = '0.' + new Array(1 - pointIndex).join('0') + digits;
+  } else if (pointIndex >= digits.length) {
+    result = digits + new Array(pointIndex - digits.length + 1).join('0');
+  } else {
+    result = digits.slice(0, pointIndex) + '.' + digits.slice(pointIndex);
+  }
+  return (negative ? '-' : '') + result;
+};
+
+/**
  * Substitute `{Title}` references with numeric literals. Unknown or
  * non-numeric references become 0 so a partially answered form still totals.
  */
@@ -72,8 +99,14 @@ const substitute = (formula: string, resolve: (name: string) => number | undefin
       return '0';
     }
     // wrap negatives so "a - {x}" with x = -5 doesn't become "a - -5" ambiguity
-    return value < 0 ? '(0 - ' + String(Math.abs(value)) + ')' : String(value);
+    return value < 0 ? '(0 - ' + plainDecimal(Math.abs(value)) + ')' : plainDecimal(value);
   });
+
+/** Exponent suffix (e.g. "e-7") starting at index i, or '' when none. */
+const readExponent = (text: string, i: number): string => {
+  const match = /^[eE][+-]?\d+/.exec(text.slice(i));
+  return match ? match[0] : '';
+};
 
 const tokenize = (input: string): IToken[] | undefined => {
   const tokens: IToken[] = [];
@@ -94,6 +127,9 @@ const tokenize = (input: string): IToken[] | undefined => {
         numberText += text.charAt(i);
         i++;
       }
+      const intExponent = readExponent(text, i);
+      numberText += intExponent;
+      i += intExponent.length;
       const parsed = Number(numberText);
       if (isNaN(parsed)) {
         return undefined;
@@ -109,6 +145,9 @@ const tokenize = (input: string): IToken[] | undefined => {
         numberText += text.charAt(i);
         i++;
       }
+      const exponent = readExponent(text, i);
+      numberText += exponent;
+      i += exponent.length;
       const parsed = Number(numberText);
       if (isNaN(parsed)) {
         return undefined;
@@ -257,6 +296,13 @@ export const evaluateFormula = (
         }
       }
       if (operators.length === 0 || argCounts.length === 0) {
+        return undefined;
+      }
+      // the comma must sit directly inside a function call's own parentheses,
+      // so "max((1,2))" (a bare group holding a comma) is rejected
+      const openParen = operators.length - 1;
+      const owner = operators[openParen - 1];
+      if (!owner || owner.kind !== 'function') {
         return undefined;
       }
       argCounts[argCounts.length - 1]++;

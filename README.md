@@ -2,7 +2,7 @@
 
 [![Website](https://img.shields.io/badge/Website-sharepointsmartsolutions.com-blue)](https://sharepointsmartsolutions.com/smart-forms) [![User Guide](https://img.shields.io/badge/User%20Guide-Read%20Now-green)](USER-GUIDE.md) [![Download](https://img.shields.io/badge/Download-Latest%20Release-CA5010?logo=github&logoColor=white)](../../releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Smart Forms brings a Microsoft Forms-style experience to SharePoint — form owners visually design forms with 24 question types (including several Forms doesn't have, like person pickers, live lookups from another list, calculated totals, signatures, and Likert grids), share a fill-in link with one click, and analyse responses on a built-in dashboard. Every submission lands in a regular SharePoint/Microsoft Lists list with real columns, so your data is never locked inside the form tool.
+Smart Forms brings a Microsoft Forms-style experience to SharePoint — form owners visually design forms with 24 question types (including several Forms doesn't have, like person pickers, live lookups from another list, calculated totals, signatures, and Likert grids), share a fill-in link with one click, and analyze responses on a built-in dashboard. Every submission lands in a regular SharePoint/Microsoft Lists list with real columns, so your data is never locked inside the form tool.
 
 ![SPFx](https://img.shields.io/badge/SPFx-1.20.0-0078D4?logo=microsoft&logoColor=white) ![React](https://img.shields.io/badge/React-17-61DAFB?logo=react&logoColor=black) ![TypeScript](https://img.shields.io/badge/TypeScript-4.7-3178C6?logo=typescript&logoColor=white) ![PnPjs](https://img.shields.io/badge/PnPjs-3.26-217346) ![Fluent UI](https://img.shields.io/badge/Fluent%20UI-8-742774)
 
@@ -26,6 +26,8 @@ Smart Forms brings a Microsoft Forms-style experience to SharePoint — form own
 | **Validation** | Required fields with custom messages, email/phone/URL checks, numeric and scale bounds, min/max selections, regex patterns, file type and size limits — all enforced before submit |
 | **Pre-flight check** | **Collect responses** first checks for empty option lists, broken formulas, branching pointing at deleted questions and unnamed questions, with a "Go to" jump link for each |
 | **Templates** | Eight starting points — customer feedback, event registration, IT request, expense claim, employee pulse, safety inspection, room booking, or blank |
+| **Version history & restore** | Owners can browse earlier saved versions of the form, preview how many questions each has, and restore one into the designer (with one-click undo) |
+| **Robust branching** | Changing a question's type or deleting/renaming its options automatically removes branching rules that no longer make sense, and tells you how many were removed |
 | **Automatic column provisioning** | Creates the matching SharePoint columns behind the scenes (clean internal names, grouped under "Smart Forms"), several at a time rather than one-by-one |
 
 ![The Branching tab on the field editor panel, with an AND/OR condition group and a plain-English preview of the rule](docs/screenshots/02_field_editor_branching.png)
@@ -37,10 +39,13 @@ Smart Forms brings a Microsoft Forms-style experience to SharePoint — form own
 | **Collect responses** | One click provisions the list columns and opens a share dialog with a copy-able link (`?sfview=fill`) that shows just the form — plus a reminder of the list permission respondents need |
 | **Non-destructive preview** | Preview validates and shows the confirmation screen without writing anything to the response list |
 | **URL prefill** | Add `&<ColumnName>=value` to a share link to pre-answer questions (e.g. `&SFDepartment=Finance`); questions can also be marked read-only so a prefilled value can't be changed |
-| **Theme-aware** | Every colour derives from the SharePoint site theme, so the form is legible on light and dark sites. The owner's accent colour is contrast-corrected automatically |
+| **Theme-aware** | Every color derives from the SharePoint site theme, so the form is legible on light and dark sites. The owner's accent color is contrast-corrected automatically |
 | **Accessible by construction** | Each question is a labelled group with proper `aria-describedby`, error and required semantics; scales, ratings and Likert grids are real radio/slider patterns with arrow-key support; an error summary links straight to the questions that need attention |
 | **Wizard mode** | One section per step with clickable step markers, a progress bar, per-step validation, and no more blank steps when branching hides a whole section |
 | **Save and resume** | Optionally let respondents save a partial response and finish it later |
+| **Edit my response** | Optionally let each respondent reopen and update their own submission |
+| **Approval workflow** | Optionally add an approval step: owners approve or reject responses from the Responses tab, with an optional email to the respondent on each decision |
+| **Localized, right-to-left aware** | The interface is translated into 30 languages, follows the SharePoint page language, and mirrors automatically for Arabic, Hebrew, Persian and Urdu |
 | **Access controls** | Open/close dates, a response cap, and one-response-per-person |
 | **Smart choice display** | Choice questions render inline when the option list is short and switch to a dropdown for long lists; options can shuffle per respondent, and a write-in "Other" is one toggle |
 | **Files and signatures** | Drag-and-drop uploads with type/size limits, and a pen/touch signature pad — both stored as attachments on the response item |
@@ -57,9 +62,9 @@ Smart Forms brings a Microsoft Forms-style experience to SharePoint — form own
 | **Compare by** | Split every summary card by any choice, yes/no, person or rating question — "NPS by department", "satisfaction by region" — without leaving the page |
 | **Drill-through** | Click a bar or donut segment to filter the response table to exactly those respondents |
 | **One filter bar** | Search, date range and answer filters apply to the dashboard, summary and table together, so all three always report the same number |
-| **Response table** | Every question available as a column with a picker and custom order, sortable columns, virtualised rows, multi-select with bulk delete |
+| **Response table** | Every question available as a column with a picker and custom order, sortable columns, virtualized rows, multi-select with bulk delete |
 | **Individual responses** | Prev/next through the filtered set, read either as a labelled list or as the form itself, with attachment links, signature previews, and a print stylesheet |
-| **Charts built for reading** | Palettes are validated for colourblind separation and contrast against the actual surface in both light and dark mode; every chart carries visible value labels and a table view |
+| **Charts built for reading** | Palettes are validated for colorblind separation and contrast against the actual surface in both light and dark mode; every chart carries visible value labels and a table view |
 | **Email notifications** | Every response emailed to the recipients you choose — full answers, formatted, with a **View in Microsoft Lists** link. No Power Automate, no connectors, no premium licensing |
 | **Respondent receipts** | Optionally email each respondent a copy of their own answers |
 | **CSV export** | One-click export of the (filtered) responses, Excel-ready with UTF-8 BOM and formula-injection guarding |
@@ -105,7 +110,7 @@ npm test
 
 Compiles the pure utility modules to CommonJS and runs them on Node — no extra
 dependencies, no browser. Covers validation, branching, the formula evaluator,
-schema migration, value round-tripping, CSV, analytics and the chart colour
+schema migration, value round-tripping, CSV, analytics and the chart color
 rules.
 
 ---
@@ -151,10 +156,10 @@ Almost everything is edited in place on the page. The property pane only picks t
 | Tab | Contains |
 |---|---|
 | **Basics** | Title, description, single-page or wizard layout, question numbering, question shuffling |
-| **Appearance** | Accent colour (eight presets plus a custom picker) and header icon |
+| **Appearance** | Accent color (eight presets plus a custom picker) and header icon |
 | **After submit** | Submit button text, thank-you title and message, "Submit another response" |
-| **Notifications** | Who gets emailed each response, and respondent receipts |
-| **Access** | Open/close dates, response cap, one-response-per-person, save-and-resume, closed message |
+| **Notifications** | Who gets emailed each response, respondent receipts, the approval workflow and decision emails |
+| **Access** | Open/close dates, response cap, one-response-per-person, save-and-resume, allow respondents to edit their response, closed message |
 
 Per-question settings — per-type options, branching, and validation (placeholders, defaults, required messages, patterns) — live in the question's **…** menu under **Branching, validation & more**, split into **Options** / **Branching** / **Validation** tabs.
 
@@ -168,7 +173,7 @@ Emails are sent through SharePoint's built-in send-email API (`no-reply@sharepoi
 | Page URL + `?sfview=fill` (what **Collect responses** copies) | Everyone — including owners — sees just the form, ready to fill in |
 | Share link + `&<ColumnName>=value` | Pre-answers a question; use the question's internal column name, e.g. `&SFDepartment=Finance` |
 
-Respondents need permission to **add items** to the response list. If someone reports an error on submit, that is almost always the cause.
+Respondents must be signed in (SPFx web parts always run as the signed-in user) and need at least read access to the site and permission to **add items** to the response list. If someone reports an error on submit, that is almost always the cause. Inside Microsoft Teams the share link points at the SharePoint page itself, not the Teams iframe. Prefilled values in a link are a convenience, not a security boundary: anyone with the link can change them.
 
 ![The Collect responses share dialog: a copy-able link plus reminders about respondent permissions and URL prefill](docs/screenshots/05_collect_responses_share.png)
 
@@ -215,7 +220,7 @@ SharePointSmartForms/
 │   │   ├── index.ts                 # schema, field types, dashboard settings, v1→v2 migration
 │   │   └── templates.ts             # eight starter forms
 │   ├── hooks/
-│   │   └── useDragList.ts           # shared drag-to-reorder behaviour
+│   │   └── useDragList.ts           # shared drag-to-reorder behavior
 │   ├── services/
 │   │   └── SharePointService.ts     # PnPjs layer: provisioning, paging, attachments, lookups, drafts
 │   ├── utils/
@@ -281,7 +286,7 @@ If the web part shows nothing at all and the console has no `[SmartForms]` lines
 - Results views load the newest 20,000 responses; beyond that the views show a notice and the list itself remains complete
 - A question's type (and a choice question's single/multi setting) is locked once its column has been published
 - Lookup questions store the resolved option *text*, not a link to the source item — responses stay readable if the source list changes, but a later rename is not reflected in existing responses
-- Addresses are stored as one formatted line rather than separate columns, so address parts can't be analysed independently
+- Addresses are stored as one formatted line rather than separate columns, so address parts can't be analyzed independently
 - Access rules (open/close dates, response caps, one-per-person) are enforced by the form, not by SharePoint — anyone with Add Items permission could still add an item directly through the list
 - The rich text editor covers bold, italic, underline and lists — not tables or images
 - Save-and-resume is available on single-page forms, not wizard forms

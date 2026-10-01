@@ -683,3 +683,24 @@ export const templateQuestionCount = (template: IFormTemplate): number => {
   );
   return count;
 };
+
+/**
+ * English template names / descriptions keyed for translation
+ * (Logic_Template_<key>_Name and Logic_Template_<key>_Description).
+ */
+export const TEMPLATE_MESSAGES: { [key: string]: string } = (() => {
+  const bag: { [key: string]: string } = {};
+  FORM_TEMPLATES.forEach((t) => {
+    bag['Logic_Template_' + t.key + '_Name'] = t.name;
+    bag['Logic_Template_' + t.key + '_Description'] = t.description;
+  });
+  return bag;
+})();
+
+/** Localized template name; `messages` is the caller's translated bag. */
+export const templateName = (template: IFormTemplate, messages?: { [key: string]: string }): string =>
+  (messages && messages['Logic_Template_' + template.key + '_Name']) || template.name;
+
+/** Localized template description. */
+export const templateDescription = (template: IFormTemplate, messages?: { [key: string]: string }): string =>
+  (messages && messages['Logic_Template_' + template.key + '_Description']) || template.description;

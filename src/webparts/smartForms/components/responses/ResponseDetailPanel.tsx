@@ -1,4 +1,6 @@
 import * as React from 'react';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 import {
   DefaultButton,
   Dialog,
@@ -6,13 +8,16 @@ import {
   DialogType,
   Icon,
   IconButton,
+  MessageBar,
+  MessageBarType,
   Panel,
   PanelType,
   Pivot,
   PivotItem,
   PrimaryButton,
   Spinner,
-  SpinnerSize
+  SpinnerSize,
+  TextField
 } from '@fluentui/react';
 import styles from './ResponsesView.module.scss';
 import { FieldType, IFormDefinition, IFormField, IFormValues, IResponseItem } from '../../models';
@@ -21,6 +26,8 @@ import { formatDuration } from '../../utils/analytics';
 import { SharePointService } from '../../services/SharePointService';
 import { ResponseFormView } from '../form/FormRenderer';
 import { RichTextView } from '../form/RichTextField';
+import { ApprovalStatus, IResponseItemEx } from '../../services/SharePointService';
+import { ApprovalChip } from './ResponseTable';
 
 export interface IResponseDetailPanelProps {
   item: IResponseItem;
@@ -34,6 +41,11 @@ export interface IResponseDetailPanelProps {
   onNavigate: (delta: number) => void;
   onDelete: (item: IResponseItem) => Promise<void>;
   onDismiss: () => void;
+  locale?: string;
+  /** show the approval controls (form has approval enabled and the viewer is the list owner) */
+  approvalEnabled?: boolean;
+  /** persist a decision; rejects on failure so the panel can show the error */
+  onSetApproval?: (item: IResponseItem, status: ApprovalStatus, comment: string) => Promise<void>;
 }
 
 interface IAttachment {
@@ -55,7 +67,31 @@ export const ResponseDetailPanel: React.FunctionComponent<IResponseDetailPanelPr
   const { item, definition } = props;
   const [confirmingDelete, setConfirmingDelete] = React.useState<boolean>(false);
   const [deleting, setDeleting] = React.useState<boolean>(false);
+  const [comment, setComment] = React.useState<string>('');
+  const [approvalBusy, setApprovalBusy] = React.useState<boolean>(false);
+  const [approvalError, setApprovalError] = React.useState<string>('');
   const [attachments, setAttachments] = React.useState<IAttachment[] | undefined>(undefined);
+
+  const ex = item as IResponseItemEx;
+  React.useEffect(() => {
+    setComment(ex.approvalComment || '');
+    setApprovalError('');
+  }, [item.id, ex.approvalComment]);
+
+  const decide = async (status: ApprovalStatus): Promise<void> => {
+    if (!props.onSetApproval) {
+      return;
+    }
+    setApprovalBusy(true);
+    setApprovalError('');
+    try {
+      await props.onSetApproval(item, status, comment.trim());
+    } catch {
+      setApprovalError(strings.Responses_Approval_Error);
+    } finally {
+      setApprovalBusy(false);
+    }
+  };
 
   const fields = React.useMemo(
     () => inputFields(definition).filter((f) => f.provisioned !== false),
@@ -125,9 +161,9 @@ export const ResponseDetailPanel: React.FunctionComponent<IResponseDetailPanelPr
     if (field.type === FieldType.Signature) {
       const files = attachmentsFor(field);
       if (files.length > 0) {
-        return <img className={styles.signaturePreview} src={files[0].url} alt="Signature" />;
+        return <img className={styles.signaturePreview} src={files[0].url} alt={strings.Responses_Detail_Signature} />;
       }
-      return <span className={raw ? styles.detailValue : styles.detailValueEmpty}>{raw ? 'Signed' : 'No answer'}</span>;
+      return <span className={raw ? styles.detailValue : styles.detailValueEmpty}>{raw ? strings.Responses_Detail_Signed : strings.Responses_Detail_NoAnswer}</span>;
     }
 
     if (field.type === FieldType.FileUpload) {
@@ -136,7 +172,7 @@ export const ResponseDetailPanel: React.FunctionComponent<IResponseDetailPanelPr
         const names = formatSharePointValue(field, raw);
         return (
           <span className={names ? styles.detailValue : styles.detailValueEmpty}>
-            {names || 'No answer'}
+            {names || strings.Responses_Detail_NoAnswer}
           </span>
         );
       }
@@ -163,7 +199,7 @@ export const ResponseDetailPanel: React.FunctionComponent<IResponseDetailPanelPr
     const text = formatSharePointValue(field, raw);
     return (
       <span className={text ? styles.detailValue : styles.detailValueEmpty}>
-        {text || 'No answer'}
+        {text || strings.Responses_Detail_NoAnswer}
       </span>
     );
   };
@@ -172,35 +208,38 @@ export const ResponseDetailPanel: React.FunctionComponent<IResponseDetailPanelPr
     <Panel
       isOpen={true}
       type={PanelType.medium}
-      headerText={'Response ' + (props.index + 1) + ' of ' + props.total}
+      headerText={formatString(strings.Responses_Detail_Header, {
+        index: props.index + 1,
+        total: props.total
+      })}
       onDismiss={props.onDismiss}
       isFooterAtBottom={true}
       onRenderFooterContent={() => (
         <div className={styles.panelFooter}>
           <IconButton
             iconProps={{ iconName: 'ChevronLeft' }}
-            title="Previous response"
-            ariaLabel="Previous response"
+            title={strings.Responses_Detail_Previous}
+            ariaLabel={strings.Responses_Detail_Previous}
             disabled={props.index <= 0}
             onClick={() => props.onNavigate(-1)}
           />
           <IconButton
             iconProps={{ iconName: 'ChevronRight' }}
-            title="Next response"
-            ariaLabel="Next response"
+            title={strings.Responses_Detail_Next}
+            ariaLabel={strings.Responses_Detail_Next}
             disabled={props.index >= props.total - 1}
             onClick={() => props.onNavigate(1)}
           />
           <DefaultButton
             iconProps={{ iconName: 'Print' }}
-            text="Print"
+            text={strings.Responses_Detail_Print}
             onClick={() => window.print()}
           />
           <span className={styles.panelFooterSpacer} />
           {props.canDelete && (
             <DefaultButton
               iconProps={{ iconName: 'Delete' }}
-              text="Delete"
+              text={strings.Responses_Detail_Delete}
               disabled={deleting}
               onClick={() => setConfirmingDelete(true)}
             />
@@ -210,7 +249,7 @@ export const ResponseDetailPanel: React.FunctionComponent<IResponseDetailPanelPr
     >
       <div className={styles.detailMeta}>
         <span className={styles.detailMetaItem}>
-          <Icon iconName="Clock" /> {item.created.toLocaleString()}
+          <Icon iconName="Clock" /> {item.created.toLocaleString(props.locale)}
         </span>
         {item.createdBy && (
           <span className={styles.detailMetaItem}>
@@ -219,32 +258,85 @@ export const ResponseDetailPanel: React.FunctionComponent<IResponseDetailPanelPr
         )}
         {item.durationSeconds !== undefined && (
           <span className={styles.detailMetaItem}>
-            <Icon iconName="Timer" /> took {formatDuration(item.durationSeconds)}
+            <Icon iconName="Timer" />{' '}
+            {formatString(strings.Responses_Detail_Took, {
+              duration: formatDuration(item.durationSeconds)
+            })}
           </span>
         )}
         {item.status === 'Draft' && (
           <span className={styles.filterChip}>
-            <Icon iconName="Edit" /> Draft
+            <Icon iconName="Edit" /> {strings.Responses_Detail_Draft}
           </span>
         )}
         <span className={styles.detailMetaItem}>#{item.id}</span>
       </div>
 
+      {props.approvalEnabled && props.onSetApproval && (
+        <div className={styles.approvalBox}>
+          <ApprovalChip status={ex.approvalStatus} />
+          {ex.reviewedBy && ex.approvalStatus && ex.approvalStatus !== 'Pending' && (
+            <div className={styles.approvalMeta}>
+              {formatString(strings.Responses_Approval_ReviewedBy, { name: ex.reviewedBy })}
+            </div>
+          )}
+          {approvalError && (
+            <MessageBar messageBarType={MessageBarType.error} onDismiss={() => setApprovalError('')}>
+              {approvalError}
+            </MessageBar>
+          )}
+          <TextField
+            label={strings.Responses_Approval_CommentLabel}
+            multiline={true}
+            rows={2}
+            value={comment}
+            disabled={approvalBusy}
+            onChange={(_e, v) => setComment(v || '')}
+          />
+          <div className={styles.approvalActions}>
+            <PrimaryButton
+              iconProps={{ iconName: 'CheckMark' }}
+              text={strings.Responses_Approval_Approve}
+              disabled={approvalBusy}
+              onClick={() => {
+                void decide('Approved');
+              }}
+            />
+            <DefaultButton
+              iconProps={{ iconName: 'Cancel' }}
+              text={strings.Responses_Approval_Reject}
+              disabled={approvalBusy}
+              onClick={() => {
+                void decide('Rejected');
+              }}
+            />
+            <DefaultButton
+              iconProps={{ iconName: 'Undo' }}
+              text={strings.Responses_Approval_Reset}
+              disabled={approvalBusy || !ex.approvalStatus || ex.approvalStatus === 'Pending'}
+              onClick={() => {
+                void decide('Pending');
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       <Pivot>
-        <PivotItem headerText="Answers" itemIcon="BulletedList">
+        <PivotItem headerText={strings.Responses_Detail_Answers} itemIcon="BulletedList">
           {attachments === undefined && hasAttachmentFields && (
-            <Spinner size={SpinnerSize.small} label="Loading attachments…" labelPosition="right" />
+            <Spinner size={SpinnerSize.small} label={strings.Responses_Detail_LoadingAttachments} labelPosition="right" />
           )}
           <div className={styles.detailList}>
             {fields.map((field) => (
               <div key={field.id} className={styles.detailRow}>
-                <div className={styles.detailLabel}>{field.title || 'Untitled question'}</div>
+                <div className={styles.detailLabel}>{field.title || strings.Responses_Dashboard_UntitledQuestion}</div>
                 {renderAnswer(field)}
               </div>
             ))}
           </div>
         </PivotItem>
-        <PivotItem headerText="As the form" itemIcon="PageLeft">
+        <PivotItem headerText={strings.Responses_Detail_AsTheForm} itemIcon="PageLeft">
           <ResponseFormView
             definition={definition}
             values={formValues}
@@ -258,19 +350,23 @@ export const ResponseDetailPanel: React.FunctionComponent<IResponseDetailPanelPr
         onDismiss={() => setConfirmingDelete(false)}
         dialogContentProps={{
           type: DialogType.normal,
-          title: 'Delete this response?',
-          subText: 'The list item moves to the site recycle bin, so it can be restored from there.'
+          title: strings.Responses_Detail_DeleteTitle,
+          subText: strings.Responses_Detail_DeleteBody
         }}
       >
         <DialogFooter>
           <PrimaryButton
-            text={deleting ? 'Deleting…' : 'Delete'}
+            text={deleting ? strings.Responses_Detail_Deleting : strings.Responses_Detail_Delete}
             disabled={deleting}
             onClick={() => {
               void handleDelete();
             }}
           />
-          <DefaultButton text="Cancel" disabled={deleting} onClick={() => setConfirmingDelete(false)} />
+          <DefaultButton
+            text={strings.Responses_Detail_Cancel}
+            disabled={deleting}
+            onClick={() => setConfirmingDelete(false)}
+          />
         </DialogFooter>
       </Dialog>
     </Panel>

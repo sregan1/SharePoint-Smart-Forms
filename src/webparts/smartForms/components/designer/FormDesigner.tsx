@@ -7,10 +7,13 @@ import {
   IContextualMenuItem,
   IContextualMenuProps,
   ITextField,
+  MessageBar,
+  MessageBarType,
   SearchBox,
   TextField,
   Toggle
 } from '@fluentui/react';
+import * as strings from 'SmartFormsWebPartStrings';
 import styles from './FormDesigner.module.scss';
 import {
   defaultsForType,
@@ -19,12 +22,18 @@ import {
   FieldCategory,
   FieldType,
   FieldWidth,
+  fieldCategoryLabel,
+  fieldPresetDescription,
+  fieldPresetLabel,
+  fieldTypeDescription,
+  fieldTypeLabel,
   getFieldTypeMeta,
   IFieldTypeMeta,
   IFormDefinition,
   IFormField,
   IFormSection,
   IImageChoiceOption,
+  IMessageBag,
   isInputType,
   newId,
   TYPE_SPECIFIC_KEYS
@@ -34,7 +43,8 @@ import {
   buildNumberMap,
   generateInternalName,
   IFormIssue,
-  pruneDanglingConditions,
+  pruneInvalidConditions,
+  retireDeletedField,
   validateDefinition
 } from '../../utils/formUtils';
 import { reorder, useDragList } from '../../hooks/useDragList';
@@ -42,6 +52,7 @@ import { SharePointService } from '../../services/SharePointService';
 import { FieldControl } from '../form/FieldControl';
 import { ContentBlock } from '../form/ContentBlock';
 import { FieldEditorPanel } from './FieldEditorPanel';
+import { formatString } from '../../utils/localeUtils';
 
 export interface IFormDesignerProps {
   definition: IFormDefinition;
@@ -53,6 +64,24 @@ export interface IFormDesignerProps {
 }
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
+
+/** Localized heading for a question-type category. */
+const messageBag = strings as unknown as IMessageBag;
+
+const categoryLabel = (category: FieldCategory): string =>
+  messageBag['Designer_Category_' + category] || fieldCategoryLabel(category, messageBag);
+
+/** Total branching rules in a definition (sections and questions). */
+const countRules = (def: IFormDefinition): number => {
+  let total = 0;
+  def.sections.forEach((section) => {
+    total += section.visibleWhen ? section.visibleWhen.conditions.length : 0;
+    section.fields.forEach((f) => {
+      total += f.visibleWhen ? f.visibleWhen.conditions.length : 0;
+    });
+  });
+  return total;
+};
 
 /** The types surfaced directly on the "Add new" button, like Microsoft Forms. */
 const POPULAR_TYPES: FieldType[] = [
@@ -77,6 +106,9 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
   const [activeFieldId, setActiveFieldId] = React.useState<string | undefined>(undefined);
   const [panelFieldId, setPanelFieldId] = React.useState<string | undefined>(undefined);
   const [outlineFilter, setOutlineFilter] = React.useState<string>('');
+  // number of branching rules the last edit removed because they no longer fit
+  const [removedRules, setRemovedRules] = React.useState<number>(0);
+  const [dropSectionId, setDropSectionId] = React.useState<string | undefined>(undefined);
 
   // keyboard-first option editing: refs let Enter/Tab/Backspace move focus
   // between option rows of the active question
@@ -110,7 +142,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
     }
   }, [props.focusFieldId]);
 
-  const issues = React.useMemo(() => validateDefinition(definition), [definition]);
+  const issues = React.useMemo(() => validateDefinition(definition, messageBag), [definition]);
   const issuesByField = React.useMemo(() => {
     const map: { [fieldId: string]: IFormIssue[] } = {};
     issues.forEach((issue) => {
@@ -127,10 +159,30 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
 
   // ----- mutation helpers -----
 
-  const update = (mutate: (next: IFormDefinition) => void): void => {
+  const update = (mutate: (next: IFormDefinition) => void, options?: { prune?: boolean }): void => {
     const next = clone(definition);
     mutate(next);
+    if (options && options.prune) {
+      const before = countRules(next);
+      pruneInvalidConditions(next);
+      const removed = before - countRules(next);
+      if (removed > 0) {
+        setRemovedRules(removed);
+      }
+    }
     props.onChange(next);
+  };
+
+  /** Drop branching rules that no longer fit (call after an option is renamed or removed). */
+  const pruneRules = (): void => {
+    const trial = clone(definition);
+    const before = countRules(trial);
+    pruneInvalidConditions(trial);
+    const removed = before - countRules(trial);
+    if (removed > 0) {
+      setRemovedRules(removed);
+      props.onChange(trial);
+    }
   };
 
   const findFieldIn = (def: IFormDefinition, fieldId: string): IFormField | undefined => {
@@ -186,7 +238,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
       Object.keys(defaults).forEach((key) => {
         target[key] = (defaults as Record<string, unknown>)[key];
       });
-    });
+    }, { prune: true });
   };
 
   const applyPreset = (sectionId: string, presetKey: string, atIndex?: number): void => {
@@ -217,8 +269,9 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
       const field: IFormField = {
         id,
         internalName: generateInternalName(
-          getFieldTypeMeta(type).label,
-          allFields(next).map((f) => f.internalName)
+          fieldTypeLabel(type, messageBag),
+          allFields(next).map((f) => f.internalName),
+          next.retiredColumns
         ),
         title: '',
         type,
@@ -247,8 +300,9 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
       const copy: IFormField = clone(field);
       copy.id = id;
       copy.internalName = generateInternalName(
-        copy.title || 'Question',
-        allFields(next).map((f) => f.internalName)
+        copy.title || strings.Designer_Card_Question,
+        allFields(next).map((f) => f.internalName),
+        next.retiredColumns
       );
       copy.provisioned = false;
       target.fields.splice(index + 1, 0, copy);
@@ -259,10 +313,15 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
   const removeField = (fieldId: string): void => {
     update((next) => {
       next.sections.forEach((section) => {
+        section.fields.forEach((f) => {
+          if (f.id === fieldId) {
+            // a published question's column stays in the list; never reuse its name
+            retireDeletedField(next, f);
+          }
+        });
         section.fields = section.fields.filter((f) => f.id !== fieldId);
       });
-      pruneDanglingConditions(next);
-    });
+    }, { prune: true });
     if (activeFieldId === fieldId) {
       setActiveFieldId(undefined);
     }
@@ -316,6 +375,68 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
     });
   };
 
+  /**
+   * Move a question to an exact spot: section + index within that section.
+   * `from` is the position in the flattened question order. Works for the end
+   * of any section and for empty sections, which a flat index cannot express.
+   */
+  const moveFieldToSection = (from: number, sectionId: string, indexInSection: number): void => {
+    update((next) => {
+      const flat: { section: IFormSection; field: IFormField }[] = [];
+      next.sections.forEach((section) => section.fields.forEach((field) => flat.push({ section, field })));
+      const source = flat[from];
+      const target = next.sections.filter((s) => s.id === sectionId)[0];
+      if (!source || !target) {
+        return;
+      }
+      const sourceIndex = source.section.fields.indexOf(source.field);
+      source.section.fields.splice(sourceIndex, 1);
+      let at = indexInSection;
+      if (source.section === target && sourceIndex < at) {
+        at--;
+      }
+      at = Math.max(0, Math.min(at, target.fields.length));
+      target.fields.splice(at, 0, source.field);
+    });
+  };
+
+  /** Drop handler for a card/outline row: lands before or after that row, within its own section. */
+  const dropOnRow = (event: React.DragEvent, sectionId: string, fieldIndex: number): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const { dragIndex, dropSide } = outlineDrag.state;
+    outlineDrag.cancel();
+    setDropSectionId(undefined);
+    if (dragIndex < 0) {
+      return;
+    }
+    moveFieldToSection(dragIndex, sectionId, dropSide === 'after' ? fieldIndex + 1 : fieldIndex);
+  };
+
+  /** Handlers that make a section's tail (or an empty section) accept a dragged question. */
+  const sectionDropProps = (section: IFormSection): React.HTMLAttributes<HTMLDivElement> => ({
+    onDragOver: (event: React.DragEvent) => {
+      if (outlineDrag.state.dragIndex < 0) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      if (dropSectionId !== section.id) {
+        setDropSectionId(section.id);
+      }
+    },
+    onDragLeave: () => setDropSectionId((prev) => (prev === section.id ? undefined : prev)),
+    onDrop: (event: React.DragEvent) => {
+      event.preventDefault();
+      const { dragIndex } = outlineDrag.state;
+      outlineDrag.cancel();
+      setDropSectionId(undefined);
+      if (dragIndex >= 0) {
+        moveFieldToSection(dragIndex, section.id, section.fields.length);
+      }
+    }
+  });
+
   const addSection = (): void => {
     update((next) => {
       next.sections.push({ id: newId(), title: '', description: '', fields: [] });
@@ -345,9 +466,9 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
       // any rule pointing *at* them has to go too — otherwise the rule dangles
       // and its owner becomes permanently visible
       if (doomed) {
-        pruneDanglingConditions(next);
+        doomed.fields.forEach((f) => retireDeletedField(next, f));
       }
-    });
+    }, { prune: true });
   };
 
   // ----- option editing -----
@@ -370,7 +491,12 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
   const removeOption = (field: IFormField, index: number): void => {
     const choices = (field.choices || []).slice();
     choices.splice(index, 1);
-    patchField(field.id, { choices });
+    update((next) => {
+      const f = findFieldIn(next, field.id);
+      if (f) {
+        f.choices = choices;
+      }
+    }, { prune: true });
   };
 
   const handleOptionKeyDown = (
@@ -421,9 +547,9 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
   const addMenu = (section: IFormSection, atIndex?: number): IContextualMenuProps => {
     const item = (meta: IFieldTypeMeta): IContextualMenuItem => ({
       key: meta.type,
-      text: meta.label,
+      text: fieldTypeLabel(meta.type, messageBag),
       iconProps: { iconName: meta.icon },
-      secondaryText: meta.description,
+      secondaryText: fieldTypeDescription(meta.type, messageBag),
       onClick: () => addField(section.id, meta.type, undefined, atIndex)
     });
 
@@ -431,9 +557,9 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
 
     const presets: IContextualMenuItem[] = FIELD_PRESETS.map((preset) => ({
       key: 'preset-' + preset.key,
-      text: preset.label,
+      text: fieldPresetLabel(preset, messageBag),
       iconProps: { iconName: preset.icon },
-      secondaryText: preset.description,
+      secondaryText: fieldPresetDescription(preset, messageBag),
       onClick: () => applyPreset(section.id, preset.key, atIndex)
     }));
 
@@ -446,7 +572,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
       byCategory.push({
         key: 'cat-' + category,
         itemType: 1 /* Header */,
-        text: category
+        text: categoryLabel(category)
       });
       inCategory.forEach((meta) => byCategory.push(item(meta)));
     });
@@ -456,13 +582,13 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
         { key: 'div1', itemType: 0 /* Divider */ },
         {
           key: 'presets',
-          text: 'Common presets',
+          text: strings.Designer_Menu_CommonPresets,
           iconProps: { iconName: 'Lightbulb' },
           subMenuProps: { items: presets }
         },
         {
           key: 'all',
-          text: 'All question types',
+          text: strings.Designer_Menu_AllTypes,
           iconProps: { iconName: 'AllApps' },
           subMenuProps: { items: byCategory }
         }
@@ -474,11 +600,11 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
     items: [
       {
         key: 'type',
-        text: 'Change type',
+        text: strings.Designer_Menu_ChangeType,
         iconProps: { iconName: getFieldTypeMeta(field.type).icon },
         disabled: field.provisioned === true,
         title: field.provisioned
-          ? 'The list column already exists, so the type is locked. Duplicate the question to change it.'
+          ? strings.Designer_Menu_TypeLockedTitle
           : undefined,
         subMenuProps: {
           items: CATEGORY_ORDER.reduce((acc: IContextualMenuItem[], category) => {
@@ -486,11 +612,11 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
             if (inCategory.length === 0) {
               return acc;
             }
-            acc.push({ key: 'h-' + category, itemType: 1, text: category });
+            acc.push({ key: 'h-' + category, itemType: 1, text: categoryLabel(category) });
             inCategory.forEach((meta) =>
               acc.push({
                 key: 'type-' + meta.type,
-                text: meta.label,
+                text: fieldTypeLabel(meta.type, messageBag),
                 iconProps: { iconName: meta.icon },
                 canCheck: true,
                 checked: field.type === meta.type,
@@ -503,26 +629,26 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
       },
       {
         key: 'settings',
-        text: 'Branching, validation & more',
+        text: strings.Designer_Menu_MoreSettings,
         iconProps: { iconName: 'Flow' },
         onClick: () => setPanelFieldId(field.id)
       },
       { key: 'div', itemType: 0 },
       {
         key: 'insert-below',
-        text: 'Insert question below',
+        text: strings.Designer_Menu_InsertBelow,
         iconProps: { iconName: 'Add' },
         subMenuProps: addMenu(section, fieldIndex + 1)
       },
       {
         key: 'duplicate',
-        text: 'Duplicate',
+        text: strings.Designer_Card_Duplicate,
         iconProps: { iconName: 'Copy' },
         onClick: () => duplicateField(section, field)
       },
       {
         key: 'delete',
-        text: 'Delete question',
+        text: strings.Designer_Card_DeleteQuestion,
         iconProps: { iconName: 'Delete' },
         onClick: () => removeField(field.id)
       }
@@ -543,7 +669,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
     }
     const matches: { [fieldId: string]: boolean } = {};
     orderedFields.forEach((field) => {
-      const haystack = (field.title || '') + ' ' + getFieldTypeMeta(field.type).label;
+      const haystack = (field.title || '') + ' ' + fieldTypeLabel(field.type, messageBag);
       if (haystack.toLowerCase().indexOf(query) !== -1) {
         matches[field.id] = true;
       }
@@ -554,36 +680,40 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
   const renderOutline = (): React.ReactNode => {
     let globalIndex = -1;
     return (
-      <aside className={styles.outline} aria-label="Question outline">
+      <aside className={styles.outline} aria-label={strings.Designer_Outline_Aria}>
         <div className={styles.outlineHeader}>
           <span>
-            {orderedFields.filter((f) => isInputType(f.type)).length} question
-            {orderedFields.filter((f) => isInputType(f.type)).length === 1 ? '' : 's'}
+            {formatString(
+              orderedFields.filter((f) => isInputType(f.type)).length === 1
+                ? strings.Designer_Outline_QuestionCountOne
+                : strings.Designer_Outline_QuestionCountOther,
+              { count: orderedFields.filter((f) => isInputType(f.type)).length }
+            )}
           </span>
           {issues.length > 0 && (
-            <span title={issues.length + ' issue(s) to review'}>
+            <span title={formatString(strings.Designer_Outline_IssuesTitle, { count: issues.length })}>
               <Icon iconName="Warning" style={{ color: 'var(--sf-warning)' }} />
             </span>
           )}
         </div>
         <div className={styles.outlineSearch}>
           <SearchBox
-            placeholder="Find a question"
+            placeholder={strings.Designer_Outline_Find}
             value={outlineFilter}
             underlined={true}
             onChange={(_e, v) => setOutlineFilter(v || '')}
           />
         </div>
         <div className={styles.outlineList}>
-          {orderedFields.length === 0 && <div className={styles.outlineEmpty}>No questions yet.</div>}
+          {orderedFields.length === 0 && <div className={styles.outlineEmpty}>{strings.Designer_Outline_Empty}</div>}
           {definition.sections.map((section, sectionIndex) => (
             <div key={section.id}>
               {definition.sections.length > 1 && (
                 <div className={styles.outlineSectionLabel}>
-                  {section.title || 'Section ' + (sectionIndex + 1)}
+                  {section.title || formatString(strings.Designer_Section_DefaultTitle, { number: sectionIndex + 1 })}
                 </div>
               )}
-              {section.fields.map((field) => {
+              {section.fields.map((field, fieldIndexInSection) => {
                 globalIndex++;
                 const index = globalIndex;
                 if (filteredOutline && !filteredOutline[field.id]) {
@@ -604,8 +734,9 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
                     key={field.id}
                     type="button"
                     className={className}
-                    title={field.title || getFieldTypeMeta(field.type).label}
+                    title={field.title || fieldTypeLabel(field.type, messageBag)}
                     {...outlineDrag.rowProps(index)}
+                    onDrop={(event) => dropOnRow(event, section.id, fieldIndexInSection)}
                     onClick={() => {
                       setActiveFieldId(field.id);
                       const card = cardRefs.current[field.id];
@@ -618,7 +749,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
                       {isInputType(field.type) ? numberMap[field.id] : '—'}
                     </span>
                     <span className={styles.outlineTitle}>
-                      {field.title || getFieldTypeMeta(field.type).label}
+                      {field.title || fieldTypeLabel(field.type, messageBag)}
                     </span>
                     {field.visibleWhen && <Icon iconName="Flow" className={styles.outlineIcon} />}
                     {issuesByField[field.id] && (
@@ -654,7 +785,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
         <div>
           <div className={styles.qLabelRow}>
             <Icon iconName={getFieldTypeMeta(field.type).icon} className={styles.optionIcon} />
-            <span className={styles.qLabelEmpty}>{getFieldTypeMeta(field.type).label}</span>
+            <span className={styles.qLabelEmpty}>{fieldTypeLabel(field.type, messageBag)}</span>
           </div>
           <div className={styles.qPreviewControl}>
             <ContentBlock
@@ -671,25 +802,25 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
         <div className={styles.qLabelRow}>
           <span className={styles.qNumber}>{numberMap[field.id]}.</span>
           <span className={field.title ? styles.qLabel : styles.qLabelEmpty}>
-            {field.title || 'Question'}
+            {field.title || strings.Designer_Card_Question}
           </span>
           {field.required && <span className={styles.requiredMark}>*</span>}
           {field.visibleWhen && (
             <span
               className={styles.branchChip}
-              title="This question only appears when a branching rule matches"
+              title={strings.Designer_Card_BranchingTitle}
             >
-              <Icon iconName="Flow" /> Branching
+              <Icon iconName="Flow" /> {strings.Designer_Card_BranchingChip}
             </span>
           )}
           {field.provisioned && (
-            <span className={styles.lockedChip} title="The list column exists, so the type is locked">
-              <Icon iconName="Lock" /> Live
+            <span className={styles.lockedChip} title={strings.Designer_Card_LiveTitle}>
+              <Icon iconName="Lock" /> {strings.Designer_Card_LiveChip}
             </span>
           )}
           {issuesByField[field.id] && (
             <span className={styles.issueChip} title={issuesByField[field.id].map((i) => i.message).join('\n')}>
-              <Icon iconName="Warning" /> Check
+              <Icon iconName="Warning" /> {strings.Designer_Card_CheckChip}
             </span>
           )}
         </div>
@@ -718,20 +849,21 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
             <TextField
               className={styles.optionInput}
               borderless={true}
-              placeholder={'Option ' + (index + 1)}
+              placeholder={formatString(strings.Designer_Option_Placeholder, { number: index + 1 })}
               value={option}
-              ariaLabel={'Option ' + (index + 1)}
+              ariaLabel={formatString(strings.Designer_Option_Placeholder, { number: index + 1 })}
               componentRef={(ref) => {
                 optionRefs.current[optionKey(field.id, index)] = ref;
               }}
               onFocus={(e) => (e.target as HTMLInputElement).select()}
               onKeyDown={(e) => handleOptionKeyDown(e, field, index)}
               onChange={(_e, v) => setOption(field, index, v || '')}
+              onBlur={pruneRules}
             />
             <IconButton
               iconProps={{ iconName: 'Cancel' }}
-              title="Remove option"
-              ariaLabel={'Remove option ' + (index + 1)}
+              title={strings.Designer_Option_Remove}
+              ariaLabel={formatString(strings.Designer_Option_RemoveAria, { number: index + 1 })}
               tabIndex={-1}
               disabled={choices.length <= 1}
               onClick={() => removeOption(field, index)}
@@ -740,12 +872,14 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
         ))}
         <ActionButton
           iconProps={{ iconName: 'Add' }}
-          text="Add option"
+          text={strings.Designer_Option_Add}
           onClick={() => insertOption(field, choices.length)}
         />
         {field.allowOther && (
           <div className={styles.optionHint}>
-            Respondents can also write in an answer labelled &ldquo;{field.otherLabel || 'Other'}&rdquo;.
+            {formatString(strings.Designer_Option_OtherHint, {
+              label: field.otherLabel || strings.Designer_Option_OtherFallback
+            })}
           </div>
         )}
       </div>
@@ -766,23 +900,23 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
             <TextField
               className={styles.optionInput}
               borderless={true}
-              placeholder={'Option ' + (index + 1)}
+              placeholder={formatString(strings.Designer_Option_Placeholder, { number: index + 1 })}
               value={option.label}
-              ariaLabel={'Option ' + (index + 1) + ' label'}
+              ariaLabel={formatString(strings.Designer_Option_LabelAria, { number: index + 1 })}
               onChange={(_e, v) => setImageOption(field, index, { label: v || '' })}
             />
             <TextField
               className={styles.optionImageInput}
               borderless={true}
-              placeholder="Image URL"
+              placeholder={strings.Designer_Option_ImageUrl}
               value={option.imageUrl}
-              ariaLabel={'Option ' + (index + 1) + ' image URL'}
+              ariaLabel={formatString(strings.Designer_Option_ImageUrlAria, { number: index + 1 })}
               onChange={(_e, v) => setImageOption(field, index, { imageUrl: v || '' })}
             />
             <IconButton
               iconProps={{ iconName: 'Cancel' }}
-              title="Remove option"
-              ariaLabel={'Remove option ' + (index + 1)}
+              title={strings.Designer_Option_Remove}
+              ariaLabel={formatString(strings.Designer_Option_RemoveAria, { number: index + 1 })}
               tabIndex={-1}
               disabled={options.length <= 1}
               onClick={() =>
@@ -793,7 +927,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
         ))}
         <ActionButton
           iconProps={{ iconName: 'Add' }}
-          text="Add option"
+          text={strings.Designer_Option_Add}
           onClick={() =>
             patchField(field.id, { imageChoices: options.concat([{ label: '', imageUrl: '' }]) })
           }
@@ -803,7 +937,11 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
   };
 
   const renderGridEditor = (field: IFormField): React.ReactNode => {
-    const renderColumn = (key: 'likertRows' | 'likertColumns', label: string): React.ReactNode => {
+    const renderColumn = (
+      key: 'likertRows' | 'likertColumns',
+      label: string,
+      addText: string
+    ): React.ReactNode => {
       const list = (field[key] as string[]) || [];
       return (
         <div className={styles.gridEditorColumn}>
@@ -813,15 +951,15 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
               <TextField
                 className={styles.optionInput}
                 borderless={true}
-                placeholder={label + ' ' + (index + 1)}
+                placeholder={formatString(strings.Designer_Grid_ItemPlaceholder, { label, number: index + 1 })}
                 value={entry}
-                ariaLabel={label + ' ' + (index + 1)}
+                ariaLabel={formatString(strings.Designer_Grid_ItemPlaceholder, { label, number: index + 1 })}
                 onChange={(_e, v) => setGridList(field, key, index, v || '')}
               />
               <IconButton
                 iconProps={{ iconName: 'Cancel' }}
-                title="Remove"
-                ariaLabel={'Remove ' + label + ' ' + (index + 1)}
+                title={strings.Designer_Grid_Remove}
+                ariaLabel={formatString(strings.Designer_Grid_RemoveAria, { label, number: index + 1 })}
                 tabIndex={-1}
                 disabled={list.length <= 1}
                 onClick={() =>
@@ -834,7 +972,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
           ))}
           <ActionButton
             iconProps={{ iconName: 'Add' }}
-            text={'Add ' + label.toLowerCase().replace(/s$/, '')}
+            text={addText}
             onClick={() => patchField(field.id, { [key]: list.concat(['']) } as Partial<IFormField>)}
           />
         </div>
@@ -842,21 +980,21 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
     };
     return (
       <div className={styles.gridEditor}>
-        {renderColumn('likertRows', 'Statements')}
-        {renderColumn('likertColumns', 'Scale')}
+        {renderColumn('likertRows', strings.Designer_Grid_Statements, strings.Designer_Grid_AddStatement)}
+        {renderColumn('likertColumns', strings.Designer_Grid_Scale, strings.Designer_Grid_AddScale)}
       </div>
     );
   };
 
   const renderWidthPicker = (field: IFormField): React.ReactNode => {
     const options: { key: FieldWidth; label: string; title: string }[] = [
-      { key: 'full', label: '1/1', title: 'Full width' },
-      { key: 'half', label: '1/2', title: 'Half width' },
-      { key: 'third', label: '1/3', title: 'One third width' }
+      { key: 'full', label: '1/1', title: strings.Designer_Width_Full },
+      { key: 'half', label: '1/2', title: strings.Designer_Width_Half },
+      { key: 'third', label: '1/3', title: strings.Designer_Width_Third }
     ];
     const current = field.width || 'full';
     return (
-      <div className={styles.widthPicker} role="group" aria-label="Question width">
+      <div className={styles.widthPicker} role="group" aria-label={strings.Designer_Width_Aria}>
         {options.map((option) => (
           <button
             key={option.key}
@@ -888,10 +1026,12 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
           <TextField
             className={styles.qTitleInput}
             borderless={true}
-            placeholder={isContent ? 'Block label (not shown to respondents)' : 'Question'}
+            placeholder={
+              isContent ? strings.Designer_Card_BlockLabelPlaceholder : strings.Designer_Card_Question
+            }
             value={field.title}
             autoFocus={true}
-            ariaLabel="Question text"
+            ariaLabel={strings.Designer_Card_QuestionText}
             onChange={(_e, v) => patchField(field.id, { title: v || '' })}
           />
         </div>
@@ -901,7 +1041,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
             <TextField
               multiline={true}
               rows={3}
-              label="Content"
+              label={strings.Designer_Field_Content}
               value={field.contentHtml || ''}
               onChange={(_e, v) => patchField(field.id, { contentHtml: v || '' })}
             />
@@ -926,28 +1066,28 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
         <div className={styles.qFooter}>
           <IconButton
             iconProps={{ iconName: 'Up' }}
-            title="Move up"
-            ariaLabel="Move question up"
+            title={strings.Designer_Card_MoveUp}
+            ariaLabel={strings.Designer_Card_MoveQuestionUp}
             disabled={fieldIndex === 0}
             onClick={() => moveFieldWithin(section.id, fieldIndex, fieldIndex - 1)}
           />
           <IconButton
             iconProps={{ iconName: 'Down' }}
-            title="Move down"
-            ariaLabel="Move question down"
+            title={strings.Designer_Card_MoveDown}
+            ariaLabel={strings.Designer_Card_MoveQuestionDown}
             disabled={fieldIndex === section.fields.length - 1}
             onClick={() => moveFieldWithin(section.id, fieldIndex, fieldIndex + 1)}
           />
           <IconButton
             iconProps={{ iconName: 'Copy' }}
-            title="Duplicate"
-            ariaLabel="Duplicate question"
+            title={strings.Designer_Card_Duplicate}
+            ariaLabel={strings.Designer_Card_DuplicateQuestion}
             onClick={() => duplicateField(section, field)}
           />
           <IconButton
             iconProps={{ iconName: 'Delete' }}
-            title="Delete question"
-            ariaLabel="Delete question"
+            title={strings.Designer_Card_DeleteQuestion}
+            ariaLabel={strings.Designer_Card_DeleteQuestion}
             onClick={() => removeField(field.id)}
           />
 
@@ -960,7 +1100,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
             field.type === FieldType.Lookup) && (
             <Toggle
               className={styles.footerToggle}
-              label="Multiple answers"
+              label={strings.Designer_Card_MultipleAnswers}
               inlineLabel={true}
               checked={field.allowMultiple === true}
               disabled={field.provisioned === true}
@@ -971,7 +1111,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
           {!isContent && (
             <Toggle
               className={styles.footerToggle}
-              label="Required"
+              label={strings.Designer_Card_Required}
               inlineLabel={true}
               checked={field.required === true}
               onChange={(_e, checked) => patchField(field.id, { required: checked === true })}
@@ -980,8 +1120,8 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
 
           <IconButton
             iconProps={{ iconName: 'MoreVertical' }}
-            title="More options"
-            ariaLabel="More options for this question"
+            title={strings.Designer_Card_MoreOptions}
+            ariaLabel={strings.Designer_Card_MoreOptionsAria}
             menuProps={overflowMenu(section, field, fieldIndex)}
             onRenderMenuIcon={() => null}
           />
@@ -1010,9 +1150,9 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
           <TextField
             className={styles.titleInput}
             borderless={true}
-            placeholder="Form title"
+            placeholder={strings.Designer_Canvas_FormTitle}
             value={definition.settings.formTitle}
-            ariaLabel="Form title"
+            ariaLabel={strings.Designer_Canvas_FormTitle}
             onChange={(_e, v) =>
               update((next) => {
                 next.settings.formTitle = v || '';
@@ -1022,9 +1162,9 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
           <TextField
             className={styles.titleDescriptionInput}
             borderless={true}
-            placeholder="Add a description (optional)"
+            placeholder={strings.Designer_Canvas_DescriptionPlaceholder}
             value={definition.settings.formDescription || ''}
-            ariaLabel="Form description"
+            ariaLabel={strings.Designer_Canvas_DescriptionAria}
             onChange={(_e, v) =>
               update((next) => {
                 next.settings.formDescription = v || '';
@@ -1033,13 +1173,25 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
           />
         </div>
 
+        {removedRules > 0 && (
+          <MessageBar
+            messageBarType={MessageBarType.warning}
+            onDismiss={() => setRemovedRules(0)}
+            dismissButtonAriaLabel={strings.Designer_Common_Cancel}
+          >
+            {formatString(
+              removedRules === 1 ? strings.Designer_Rules_RemovedOne : strings.Designer_Rules_RemovedOther,
+              { count: removedRules }
+            )}
+          </MessageBar>
+        )}
+
         {orderedFields.length === 0 && (
           <div className={styles.emptyCanvas}>
             <Icon iconName="PageAdd" className={styles.emptyCanvasIcon} />
-            <h3>Add your first question</h3>
+            <h3>{strings.Designer_Canvas_EmptyTitle}</h3>
             <p>
-              Pick a question type to get started. You can reorder questions by dragging them, and add
-              branching so people only see what applies to them.
+              {strings.Designer_Canvas_EmptyBody}
             </p>
           </div>
         )}
@@ -1049,15 +1201,18 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
             {showSectionChrome && (
               <div className={styles.sectionCard}>
                 <div className={styles.sectionChip}>
-                  Section {sectionIndex + 1} of {definition.sections.length}
+                  {formatString(strings.Designer_Section_Chip, {
+                    number: sectionIndex + 1,
+                    total: definition.sections.length
+                  })}
                 </div>
                 <div className={styles.sectionHeaderRow}>
                   <div className={styles.sectionTitleFields}>
                     <TextField
                       borderless={true}
                       value={section.title}
-                      placeholder="Section title"
-                      ariaLabel={'Section ' + (sectionIndex + 1) + ' title'}
+                      placeholder={strings.Designer_Section_TitlePlaceholder}
+                      ariaLabel={formatString(strings.Designer_Section_TitleAria, { number: sectionIndex + 1 })}
                       className={styles.sectionTitleInput}
                       onChange={(_e, v) =>
                         update((next) => {
@@ -1068,8 +1223,8 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
                     <TextField
                       borderless={true}
                       value={section.description || ''}
-                      placeholder="Description (optional)"
-                      ariaLabel={'Section ' + (sectionIndex + 1) + ' description'}
+                      placeholder={strings.Designer_Section_DescriptionPlaceholder}
+                      ariaLabel={formatString(strings.Designer_Section_DescriptionAria, { number: sectionIndex + 1 })}
                       className={styles.sectionDescriptionInput}
                       onChange={(_e, v) =>
                         update((next) => {
@@ -1081,22 +1236,22 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
                   <div className={styles.sectionActions}>
                     <IconButton
                       iconProps={{ iconName: 'Up' }}
-                      title="Move section up"
-                      ariaLabel="Move section up"
+                      title={strings.Designer_Section_MoveUp}
+                      ariaLabel={strings.Designer_Section_MoveUp}
                       disabled={sectionIndex === 0}
                       onClick={() => moveSection(section, -1)}
                     />
                     <IconButton
                       iconProps={{ iconName: 'Down' }}
-                      title="Move section down"
-                      ariaLabel="Move section down"
+                      title={strings.Designer_Section_MoveDown}
+                      ariaLabel={strings.Designer_Section_MoveDown}
                       disabled={sectionIndex === definition.sections.length - 1}
                       onClick={() => moveSection(section, 1)}
                     />
                     <IconButton
                       iconProps={{ iconName: 'Delete' }}
-                      title="Delete section"
-                      ariaLabel="Delete section"
+                      title={strings.Designer_Section_Delete}
+                      ariaLabel={strings.Designer_Section_Delete}
                       onClick={() => removeSection(section)}
                     />
                   </div>
@@ -1131,7 +1286,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
                   onClick={() => !active && setActiveFieldId(field.id)}
                   onDragOver={dragHandlers.onDragOver}
                   onDragLeave={dragHandlers.onDragLeave}
-                  onDrop={dragHandlers.onDrop}
+                  onDrop={(event) => dropOnRow(event, section.id, fieldIndex)}
                 >
                   {/*
                     Only the grip starts a drag. Making the whole card draggable
@@ -1141,8 +1296,10 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
                   <button
                     type="button"
                     className={styles.qDragHandle}
-                    title="Drag to reorder"
-                    aria-label={'Reorder ' + (field.title || 'question')}
+                    title={strings.Designer_Card_DragToReorder}
+                    aria-label={formatString(strings.Designer_Card_ReorderAria, {
+                      title: field.title || strings.Designer_Card_ReorderFallback
+                    })}
                     draggable={true}
                     onDragStart={dragHandlers.onDragStart}
                     onDragEnd={dragHandlers.onDragEnd}
@@ -1165,11 +1322,20 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
               );
             })}
 
+            {outlineDrag.state.dragIndex >= 0 && (
+              <div
+                className={dropSectionId === section.id ? styles.sectionDropZoneActive : styles.sectionDropZone}
+                {...sectionDropProps(section)}
+              >
+                {section.fields.length === 0 ? strings.Designer_Section_DropHere : strings.Designer_Section_DropEnd}
+              </div>
+            )}
+
             <div className={styles.addNewRow}>
               <DefaultButton
                 className={styles.addNewButton}
                 iconProps={{ iconName: 'Add' }}
-                text="Add new"
+                text={strings.Designer_Canvas_AddNew}
                 menuProps={addMenu(section)}
               />
             </div>
@@ -1179,7 +1345,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
         <div className={styles.addSectionRow}>
           <ActionButton
             iconProps={{ iconName: 'DoubleChevronDown8' }}
-            text="Add section"
+            text={strings.Designer_Canvas_AddSection}
             onClick={addSection}
           />
         </div>
@@ -1194,7 +1360,7 @@ export const FormDesigner: React.FunctionComponent<IFormDesignerProps> = (props)
                 next.sections.forEach((s) => {
                   s.fields = s.fields.map((f) => (f.id === updated.id ? updated : f));
                 });
-              });
+              }, { prune: true });
               setPanelFieldId(undefined);
             }}
             onDismiss={() => setPanelFieldId(undefined)}

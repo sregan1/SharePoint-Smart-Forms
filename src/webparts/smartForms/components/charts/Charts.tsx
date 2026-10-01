@@ -1,4 +1,6 @@
 import * as React from 'react';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 import { Icon } from '@fluentui/react';
 import styles from './Charts.module.scss';
 import { IChartInk } from '../../utils/theme';
@@ -22,6 +24,8 @@ export interface IChartDatum {
   detail?: string;
   /** overrides the series color for this datum */
   color?: string;
+  /** the analytics row behind this datum, handed back to onSelect handlers for click-to-filter */
+  row?: { label: string; filterValue?: string; filterValues?: string[] };
 }
 
 export const formatCompact = (value: number): string => {
@@ -125,7 +129,7 @@ export const BarChart: React.FunctionComponent<IBarChartProps> = (props) => {
   const max = Math.max(1, ...props.data.map((d) => d.value));
 
   if (props.data.length === 0) {
-    return <div className={styles.chartEmpty}>No answers yet.</div>;
+    return <div className={styles.chartEmpty}>{strings.Charts_NoAnswers}</div>;
   }
 
   return (
@@ -180,12 +184,38 @@ export interface IColumnChartProps {
   onSelect?: (datum: IChartDatum, index: number) => void;
 }
 
-const MAX_BAR_THICKNESS = 24;
+const MAX_BAR_THICKNESS = 40;
 
 /** Vertical columns with a value on the cap. Used for scales and histograms. */
 export const ColumnChart: React.FunctionComponent<IColumnChartProps> = (props) => {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const tooltip = useTooltip(containerRef);
+
+  // Measure the real width so the viewBox is in pixels: the svg then renders at
+  // exactly `height` px instead of growing with its container's width, and text
+  // is no longer stretched horizontally.
+  const [width, setWidth] = React.useState<number>(300);
+  const isEmpty = props.data.length === 0;
+  React.useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) {
+      return undefined;
+    }
+    const measure = (): void => {
+      const w = Math.round(el.getBoundingClientRect().width);
+      if (w > 0) {
+        setWidth(w);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(measure);
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [isEmpty]);
 
   const height = props.height || 150;
   const paddingTop = 18;
@@ -194,12 +224,11 @@ export const ColumnChart: React.FunctionComponent<IColumnChartProps> = (props) =
   const count = props.data.length;
 
   if (count === 0) {
-    return <div className={styles.chartEmpty}>No answers yet.</div>;
+    return <div className={styles.chartEmpty}>{strings.Charts_NoAnswers}</div>;
   }
 
   const max = Math.max(1, ...props.data.map((d) => d.value));
-  // work in a 0..100 viewBox on x so the chart scales with its container
-  const bandWidth = 100 / count;
+  const bandWidth = width / count;
   const barWidth = Math.min(bandWidth * 0.62, MAX_BAR_THICKNESS);
   const labelEvery = props.labelEvery || 1;
 
@@ -207,16 +236,16 @@ export const ColumnChart: React.FunctionComponent<IColumnChartProps> = (props) =
     <div className={styles.chartRoot} ref={containerRef}>
       <svg
         className={styles.svg}
-        viewBox={'0 0 100 ' + height}
-        preserveAspectRatio="none"
+        viewBox={'0 0 ' + width + ' ' + height}
+        height={height}
         role="img"
-        aria-label={'Column chart with ' + count + ' categories'}
+        aria-label={formatString(strings.Charts_ColumnChartAria, { count: count })}
       >
         {/* baseline only — gridlines would be noise at this size */}
         <line
           x1={0}
           y1={paddingTop + plotHeight}
-          x2={100}
+          x2={width}
           y2={paddingTop + plotHeight}
           stroke={props.ink.axis}
           strokeWidth={0.4}
@@ -243,7 +272,7 @@ export const ColumnChart: React.FunctionComponent<IColumnChartProps> = (props) =
                     title: datum.label,
                     rows: [
                       {
-                        label: datum.detail || 'Responses',
+                        label: datum.detail || strings.Charts_Responses,
                         value: datum.value + ' · ' + formatPercent(datum.value, props.total),
                         color: datum.color || props.color
                       }
@@ -259,8 +288,7 @@ export const ColumnChart: React.FunctionComponent<IColumnChartProps> = (props) =
                   x={index * bandWidth + bandWidth / 2}
                   y={y - 5}
                   textAnchor="middle"
-                  // counteract the non-uniform viewBox scaling on x
-                  style={{ fontSize: '9px' }}
+                  style={{ fontSize: '10px' }}
                 >
                   {formatCompact(datum.value)}
                 </text>
@@ -271,7 +299,7 @@ export const ColumnChart: React.FunctionComponent<IColumnChartProps> = (props) =
                   x={index * bandWidth + bandWidth / 2}
                   y={height - 7}
                   textAnchor="middle"
-                  style={{ fontSize: '9px' }}
+                  style={{ fontSize: '10px' }}
                 >
                   {datum.label}
                 </text>
@@ -318,7 +346,7 @@ export const DonutChart: React.FunctionComponent<IDonutChartProps> = (props) => 
   const total = props.data.reduce((sum, d) => sum + d.value, 0);
 
   if (total <= 0) {
-    return <div className={styles.chartEmpty}>No answers yet.</div>;
+    return <div className={styles.chartEmpty}>{strings.Charts_NoAnswers}</div>;
   }
 
   let angle = 0;
@@ -376,7 +404,7 @@ export const DonutChart: React.FunctionComponent<IDonutChartProps> = (props) => 
           height={size}
           viewBox={'0 0 ' + size + ' ' + size}
           role="img"
-          aria-label={'Donut chart of ' + props.data.length + ' categories'}
+          aria-label={formatString(strings.Charts_DonutChartAria, { count: props.data.length })}
           style={{ flexShrink: 0 }}
         >
           {arcs.map((arc, index) =>
@@ -404,7 +432,7 @@ export const DonutChart: React.FunctionComponent<IDonutChartProps> = (props) => 
                     title: arc.datum.label,
                     rows: [
                       {
-                        label: 'Responses',
+                        label: strings.Charts_Responses,
                         value: arc.datum.value + ' · ' + formatPercent(arc.datum.value, total),
                         color: arc.color
                       }
@@ -485,7 +513,7 @@ export const AreaChart: React.FunctionComponent<IAreaChartProps> = (props) => {
 
   const points = props.points;
   if (points.length === 0) {
-    return <div className={styles.chartEmpty}>No responses yet.</div>;
+    return <div className={styles.chartEmpty}>{strings.Charts_NoResponses}</div>;
   }
 
   const max = Math.max(1, ...points.map((p) => p.value));
@@ -524,7 +552,7 @@ export const AreaChart: React.FunctionComponent<IAreaChartProps> = (props) => {
       title: points[index].label,
       rows: [
         {
-          label: props.valueLabel || 'Responses',
+          label: props.valueLabel || strings.Charts_Responses,
           value: String(points[index].value),
           color: props.color
         }
@@ -538,7 +566,7 @@ export const AreaChart: React.FunctionComponent<IAreaChartProps> = (props) => {
         className={styles.svg}
         viewBox={'0 0 ' + width + ' ' + height}
         role="img"
-        aria-label="Responses over time"
+        aria-label={strings.Charts_ResponsesOverTime}
       >
         {ticks.map((tick) => (
           <g key={tick}>
@@ -872,7 +900,7 @@ export const DivergingBar: React.FunctionComponent<IDivergingBarProps> = (props)
   const tooltip = useTooltip(containerRef);
 
   if (props.rows.length === 0 || props.categories.length === 0) {
-    return <div className={styles.chartEmpty}>No answers yet.</div>;
+    return <div className={styles.chartEmpty}>{strings.Charts_NoAnswers}</div>;
   }
 
   return (

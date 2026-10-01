@@ -15,6 +15,7 @@ import {
   TextField,
   Toggle
 } from '@fluentui/react';
+import * as strings from 'SmartFormsWebPartStrings';
 import styles from './FormDesigner.module.scss';
 import {
   ConditionMatch,
@@ -26,6 +27,7 @@ import {
   IFormField,
   IListColumnInfo,
   IListInfo,
+  IMessageBag,
   isInputType,
   NumberFormat,
   RatingIcon,
@@ -37,12 +39,15 @@ import {
   findField,
   formatValue,
   inputFields,
-  OPERATOR_LABELS,
+  operatorLabels,
   operatorsForField
 } from '../../utils/formUtils';
 import { evaluateFormula, formulaReferences } from '../../utils/formula';
 import { CURRENCY_OPTIONS } from '../../utils/spFieldXml';
 import { SharePointService } from '../../services/SharePointService';
+import { formatString } from '../../utils/localeUtils';
+
+const messageBag = strings as unknown as IMessageBag;
 
 export interface IFieldEditorPanelProps {
   field: IFormField;
@@ -62,23 +67,23 @@ const numberOrUndefined = (text: string): number | undefined => {
 };
 
 const CONTENT_STYLES: IDropdownOption[] = [
-  { key: 'info', text: 'Info (accent)' },
-  { key: 'success', text: 'Success (green)' },
-  { key: 'warning', text: 'Warning (amber)' },
-  { key: 'text', text: 'Plain text' },
-  { key: 'divider', text: 'Divider line' }
+  { key: 'info', text: strings.Designer_Field_StyleInfo },
+  { key: 'success', text: strings.Designer_Field_StyleSuccess },
+  { key: 'warning', text: strings.Designer_Field_StyleWarning },
+  { key: 'text', text: strings.Designer_Field_StylePlain },
+  { key: 'divider', text: strings.Designer_Field_StyleDivider }
 ];
 
 const RATING_ICONS: IDropdownOption[] = [
-  { key: 'star', text: 'Stars' },
-  { key: 'heart', text: 'Hearts' },
-  { key: 'like', text: 'Thumbs up' }
+  { key: 'star', text: strings.Designer_Field_IconStars },
+  { key: 'heart', text: strings.Designer_Field_IconHearts },
+  { key: 'like', text: strings.Designer_Field_IconThumbs }
 ];
 
 const NUMBER_FORMATS: IDropdownOption[] = [
-  { key: 'plain', text: 'Plain number' },
-  { key: 'currency', text: 'Currency' },
-  { key: 'percent', text: 'Percentage' }
+  { key: 'plain', text: strings.Designer_Field_FormatPlain },
+  { key: 'currency', text: strings.Designer_Field_FormatCurrency },
+  { key: 'percent', text: strings.Designer_Field_FormatPercent }
 ];
 
 /**
@@ -182,19 +187,30 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
     }
     const parts = conditions.map((condition) => {
       const driver = findField(props.definition, condition.fieldId);
-      const label = OPERATOR_LABELS.filter((o) => o.key === condition.operator)[0];
+      const label = operatorLabels(messageBag).filter((o) => o.key === condition.operator)[0];
       const operatorText = label ? label.text : condition.operator;
-      const name = driver ? driver.title || 'Untitled question' : 'a deleted question';
+      const name = driver
+        ? driver.title || strings.Designer_Field_UntitledQuestion
+        : strings.Designer_Field_DeletedQuestion;
       if (UNARY_OPERATORS.indexOf(condition.operator) !== -1) {
-        return '"' + name + '" ' + operatorText;
+        return formatString(strings.Designer_Rule_Unary, { name, operator: operatorText });
       }
       if (condition.operator === 'between') {
-        return '"' + name + '" ' + operatorText + ' ' + (condition.value || '?') + ' and ' + (condition.value2 || '?');
+        return formatString(strings.Designer_Rule_Between, {
+          name,
+          operator: operatorText,
+          value: condition.value || '?',
+          value2: condition.value2 || '?'
+        });
       }
-      return '"' + name + '" ' + operatorText + ' "' + (condition.value || '') + '"';
+      return formatString(strings.Designer_Rule_Binary, {
+        name,
+        operator: operatorText,
+        value: condition.value || ''
+      });
     });
-    const joiner = match === 'any' ? ' OR ' : ' AND ';
-    return 'Shown when ' + parts.join(joiner) + '.';
+    const joiner = ' ' + (match === 'any' ? strings.Designer_Rule_JoinAny : strings.Designer_Rule_JoinAll) + ' ';
+    return formatString(strings.Designer_Rule_Preview, { conditions: parts.join(joiner) });
   };
 
   /** Options for a rule's value box when the driver is a choice question. */
@@ -204,8 +220,8 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
     }
     if (driver.type === FieldType.YesNo || driver.type === FieldType.Consent) {
       return [
-        { key: 'Yes', text: 'Yes' },
-        { key: 'No', text: 'No' }
+        { key: 'Yes', text: strings.Designer_Field_Yes },
+        { key: 'No', text: strings.Designer_Field_No }
       ];
     }
     if (driver.type === FieldType.Choice) {
@@ -222,7 +238,7 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
   const renderCondition = (condition: ICondition, index: number): React.ReactNode => {
     const driver = findField(props.definition, condition.fieldId);
     const allowedOperators = operatorsForField(driver);
-    const operatorOptions = OPERATOR_LABELS.filter((o) => allowedOperators.indexOf(o.key) !== -1).map(
+    const operatorOptions = operatorLabels(messageBag).filter((o) => allowedOperators.indexOf(o.key) !== -1).map(
       (o) => ({ key: o.key, text: o.text })
     );
     const needsValue = UNARY_OPERATORS.indexOf(condition.operator) === -1;
@@ -232,8 +248,8 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
       <div key={index} className={styles.ruleRow}>
         <div className={styles.ruleRowFields}>
           <Dropdown
-            label={index === 0 ? 'When' : undefined}
-            options={otherFields.map((f) => ({ key: f.id, text: f.title || 'Untitled question' }))}
+            label={index === 0 ? strings.Designer_Field_When : undefined}
+            options={otherFields.map((f) => ({ key: f.id, text: f.title || strings.Designer_Field_UntitledQuestion }))}
             selectedKey={condition.fieldId}
             onChange={(_e, option) => {
               if (!option) {
@@ -259,7 +275,7 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
               <Dropdown
                 options={valueOptions}
                 selectedKey={condition.value || null}
-                placeholder="Select a value"
+                placeholder={strings.Designer_Field_SelectValue}
                 onChange={(_e, option) => option && patchCondition(index, { value: String(option.key) })}
               />
             ) : (
@@ -267,8 +283,8 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                 value={condition.value || ''}
                 placeholder={
                   driver && (driver.type === FieldType.Date || driver.type === FieldType.Time)
-                    ? 'YYYY-MM-DD or "today"'
-                    : 'Value'
+                    ? strings.Designer_Field_DateValuePlaceholder
+                    : strings.Designer_Field_ValuePlaceholder
                 }
                 onChange={(_e, v) => patchCondition(index, { value: v })}
               />
@@ -276,15 +292,15 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
           {condition.operator === 'between' && (
             <TextField
               value={condition.value2 || ''}
-              placeholder="Upper bound"
+              placeholder={strings.Designer_Field_UpperBound}
               onChange={(_e, v) => patchCondition(index, { value2: v })}
             />
           )}
         </div>
         <DefaultButton
           iconProps={{ iconName: 'Delete' }}
-          title="Remove this condition"
-          ariaLabel="Remove this condition"
+          title={strings.Designer_Field_RemoveCondition}
+          ariaLabel={strings.Designer_Field_RemoveCondition}
           onClick={() => removeCondition(index)}
         />
       </div>
@@ -298,13 +314,13 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
       return '';
     }
     if (evaluateFormula(field.formula || '', () => 1) === undefined) {
-      return 'This formula cannot be worked out. Check the brackets and operators.';
+      return strings.Designer_Field_FormulaInvalid;
     }
     const missing = formulaReferences(field.formula || '').filter(
       (name) => !allFields(props.definition).filter((f) => (f.title || '').trim().toLowerCase() === name.toLowerCase())[0]
     );
     if (missing.length > 0) {
-      return 'These questions do not exist: ' + missing.join(', ') + '.';
+      return formatString(strings.Designer_Field_FormulaMissing, { names: missing.join(', ') });
     }
     return '';
   };
@@ -320,7 +336,9 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
       // preview against 10 so the shape of the result is visible
       return referenced ? 10 : undefined;
     });
-    return result === undefined ? '' : 'With every input at 10, this shows ' + formatValue(field, result) + '.';
+    return result === undefined
+      ? ''
+      : formatString(strings.Designer_Field_FormulaPreview, { value: formatValue(field, result) });
   };
 
   // ----- per-type capability flags -----
@@ -368,14 +386,16 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
     switch (field.type) {
       case FieldType.YesNo:
       case FieldType.Consent:
-        return 'Use "yes" or "no"';
+        return strings.Designer_Field_HintYesNo;
       case FieldType.Choice:
       case FieldType.Lookup:
-        return field.allowMultiple ? 'Separate multiple defaults with ;' : 'Must match one of the options';
+        return field.allowMultiple
+          ? strings.Designer_Field_HintMultiDefault
+          : strings.Designer_Field_HintSingleDefault;
       case FieldType.Date:
-        return 'Use "today", or a date like 2026-03-01';
+        return strings.Designer_Field_HintDate;
       case FieldType.Time:
-        return 'Use "now", or a time like 09:30';
+        return strings.Designer_Field_HintTime;
       default:
         return '';
     }
@@ -395,13 +415,13 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
     <Panel
       isOpen={true}
       type={PanelType.medium}
-      headerText={field.title || 'Question settings'}
+      headerText={field.title || strings.Designer_Field_QuestionSettings}
       onDismiss={props.onDismiss}
       isFooterAtBottom={true}
       onRenderFooterContent={() => (
         <div className={styles.panelFooter}>
-          <PrimaryButton text="Apply" onClick={handleSave} />
-          <DefaultButton text="Cancel" onClick={props.onDismiss} />
+          <PrimaryButton text={strings.Designer_Common_Apply} onClick={handleSave} />
+          <DefaultButton text={strings.Designer_Common_Cancel} onClick={props.onDismiss} />
         </div>
       )}
     >
@@ -409,9 +429,9 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
         {/* ----- Content blocks have their own short form ----- */}
         {isContent ? (
           <>
-            <h4 className={styles.panelSectionTitle}>Appearance</h4>
+            <h4 className={styles.panelSectionTitle}>{strings.Designer_Field_Appearance}</h4>
             <Dropdown
-              label="Style"
+              label={strings.Designer_Field_Style}
               options={CONTENT_STYLES}
               selectedKey={field.contentStyle || 'info'}
               onChange={(_e, option) =>
@@ -419,39 +439,39 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
               }
             />
             <TextField
-              label="Image URL (optional)"
+              label={strings.Designer_Field_ImageUrl}
               value={field.contentImageUrl || ''}
               placeholder="https://…"
               onChange={(_e, v) => set({ contentImageUrl: v })}
             />
             <TextField
-              label="Content"
+              label={strings.Designer_Field_Content}
               multiline={true}
               rows={5}
               value={field.contentHtml || ''}
-              description="Basic formatting is allowed: bold, italic, lists and links."
+              description={strings.Designer_Field_BasicFormatting}
               onChange={(_e, v) => set({ contentHtml: v })}
             />
           </>
         ) : (
           <>
-            <Pivot aria-label="Question settings" defaultSelectedKey="options">
+            <Pivot aria-label={strings.Designer_Field_QuestionSettings} defaultSelectedKey="options">
               {/* ----- Per-type options ----- */}
-              <PivotItem headerText="Options" itemKey="options">
+              <PivotItem headerText={strings.Designer_Field_TabOptions} itemKey="options">
                 <div className={styles.panelTabContent}>{renderOptionsTab()}</div>
               </PivotItem>
 
               {/* ----- Branching ----- */}
-              <PivotItem headerText="Branching" itemKey="branching">
+              <PivotItem headerText={strings.Designer_Field_TabBranching} itemKey="branching">
                 <div className={styles.panelTabContent}>
                   {otherFields.length === 0 ? (
                     <p className={styles.panelHint}>
-                      Add another question first — branching needs something to depend on.
+                      {strings.Designer_Field_BranchingNeedsQuestion}
                     </p>
                   ) : (
                     <>
                       <Toggle
-                        label="Only show this question when other answers match"
+                        label={strings.Designer_Field_BranchingToggle}
                         checked={conditions.length > 0}
                         onChange={(_e, checked) => {
                           if (checked) {
@@ -465,12 +485,12 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                         <div className={styles.ruleGroup}>
                           {conditions.length > 1 && (
                             <div className={styles.ruleMatchRow}>
-                              <span>Match</span>
+                              <span>{strings.Designer_Field_Match}</span>
                               <Dropdown
                                 className={styles.ruleMatchDropdown}
                                 options={[
-                                  { key: 'all', text: 'all of these' },
-                                  { key: 'any', text: 'any of these' }
+                                  { key: 'all', text: strings.Designer_Field_MatchAll },
+                                  { key: 'any', text: strings.Designer_Field_MatchAny }
                                 ]}
                                 selectedKey={match}
                                 onChange={(_e, option) =>
@@ -482,7 +502,7 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                           {conditions.map(renderCondition)}
                           <ActionButton
                             iconProps={{ iconName: 'Add' }}
-                            text="Add condition"
+                            text={strings.Designer_Field_AddCondition}
                             onClick={addCondition}
                           />
                           <div className={styles.rulePreview}>{rulePreview()}</div>
@@ -494,39 +514,45 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
               </PivotItem>
 
               {/* ----- Help & prompts, validation ----- */}
-              <PivotItem headerText="Validation" itemKey="validation">
+              <PivotItem headerText={strings.Designer_Field_TabValidation} itemKey="validation">
                 <div className={styles.panelTabContent}>
                   <TextField
-                    label="Help text"
+                    label={strings.Designer_Field_HelpText}
                     value={field.description || ''}
-                    placeholder="Shown under the question label"
+                    placeholder={strings.Designer_Field_HelpTextPlaceholder}
                     onChange={(_e, v) => set({ description: v })}
                   />
                   {supportsPlaceholder && (
                     <TextField
-                      label={field.type === FieldType.Consent ? 'Checkbox label' : 'Placeholder'}
+                      label={
+                        field.type === FieldType.Consent
+                          ? strings.Designer_Field_CheckboxLabel
+                          : strings.Designer_Field_Placeholder
+                      }
                       value={field.placeholder || ''}
                       onChange={(_e, v) => set({ placeholder: v })}
                     />
                   )}
                   {supportsDefault && (
                     <TextField
-                      label="Default answer"
+                      label={strings.Designer_Field_DefaultAnswer}
                       value={field.defaultValue || ''}
                       description={defaultValueHint()}
                       onChange={(_e, v) => set({ defaultValue: v })}
                     />
                   )}
                   <TextField
-                    label="Custom required message"
+                    label={strings.Designer_Field_RequiredMessage}
                     value={field.requiredMessage || ''}
-                    placeholder={(field.title || 'This question') + ' is required'}
-                    description="Shown instead of the standard message when this question is left blank"
+                    placeholder={formatString(strings.Designer_Field_RequiredMessagePlaceholder, {
+                      title: field.title || strings.Designer_Field_ThisQuestion
+                    })}
+                    description={strings.Designer_Field_RequiredMessageDescription}
                     disabled={field.required !== true}
                     onChange={(_e, v) => set({ requiredMessage: v })}
                   />
                   <Toggle
-                    label="Read-only (answer can only come from a prefilled link)"
+                    label={strings.Designer_Field_ReadOnly}
                     checked={field.readOnly === true}
                     onChange={(_e, checked) => set({ readOnly: checked === true })}
                   />
@@ -535,10 +561,10 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                     field.type === FieldType.Text ||
                     field.type === FieldType.MultilineText) && (
                     <>
-                      <h4 className={styles.panelSectionTitle}>Validation rules</h4>
+                      <h4 className={styles.panelSectionTitle}>{strings.Designer_Field_ValidationRules}</h4>
                       {(field.type === FieldType.Text || field.type === FieldType.MultilineText) && (
                         <TextField
-                          label="Maximum length"
+                          label={strings.Designer_Field_MaxLength}
                           value={field.maxLength === undefined ? '' : String(field.maxLength)}
                           placeholder="255"
                           onChange={(_e, v) => set({ maxLength: numberOrUndefined(v) })}
@@ -547,16 +573,16 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                       {supportsPattern && (
                         <>
                           <TextField
-                            label="Must match this pattern"
+                            label={strings.Designer_Field_Pattern}
                             value={field.pattern || ''}
                             placeholder="^[A-Z]{2}\d{4}$"
-                            description="A regular expression. Leave blank for no pattern check."
+                            description={strings.Designer_Field_PatternDescription}
                             onChange={(_e, v) => set({ pattern: v })}
                           />
                           <TextField
-                            label="Message when the pattern doesn't match"
+                            label={strings.Designer_Field_PatternMessage}
                             value={field.patternMessage || ''}
-                            placeholder="This answer is not in the expected format"
+                            placeholder={strings.Designer_Field_PatternMessagePlaceholder}
                             disabled={!field.pattern}
                             onChange={(_e, v) => set({ patternMessage: v })}
                           />
@@ -573,14 +599,14 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
     </Panel>
   );
 
-  /** The per-type "Options" tab: the long tail of field-specific settings. */
+  /** The per-type {strings.Designer_Field_TabOptions} tab: the long tail of field-specific settings. */
   function renderOptionsTab(): React.ReactNode {
     return (
       <>
             {isNumeric && (
               <>
                 <Dropdown
-                  label="Format"
+                  label={strings.Designer_Field_Format}
                   options={NUMBER_FORMATS}
                   selectedKey={field.numberFormat || 'plain'}
                   onChange={(_e, option) =>
@@ -589,7 +615,7 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                 />
                 {field.numberFormat === 'currency' && (
                   <Dropdown
-                    label="Currency"
+                    label={strings.Designer_Field_FormatCurrency}
                     options={CURRENCY_OPTIONS.map((c) => ({
                       key: c.symbol,
                       text: c.symbol + '  ' + c.label
@@ -600,25 +626,25 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                 )}
                 {field.numberFormat === 'plain' && (
                   <TextField
-                    label="Unit shown after the value"
+                    label={strings.Designer_Field_UnitSuffix}
                     value={field.unitSuffix || ''}
-                    placeholder="kg, hrs, items…"
+                    placeholder={strings.Designer_Field_UnitSuffixPlaceholder}
                     onChange={(_e, v) => set({ unitSuffix: v })}
                   />
                 )}
                 <div className={styles.inlineFields}>
                   <TextField
-                    label="Minimum"
+                    label={strings.Designer_Field_Minimum}
                     value={field.min === undefined ? '' : String(field.min)}
                     onChange={(_e, v) => set({ min: numberOrUndefined(v) })}
                   />
                   <TextField
-                    label="Maximum"
+                    label={strings.Designer_Field_Maximum}
                     value={field.max === undefined ? '' : String(field.max)}
                     onChange={(_e, v) => set({ max: numberOrUndefined(v) })}
                   />
                   <TextField
-                    label="Decimals"
+                    label={strings.Designer_Field_Decimals}
                     value={field.decimalPlaces === undefined ? '' : String(field.decimalPlaces)}
                     onChange={(_e, v) => set({ decimalPlaces: numberOrUndefined(v) })}
                   />
@@ -629,12 +655,12 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
             {field.type === FieldType.Calculated && (
               <>
                 <TextField
-                  label="Formula"
+                  label={strings.Designer_Field_Formula}
                   value={field.formula || ''}
-                  placeholder="{Quantity} * {Unit price}"
+                  placeholder={strings.Designer_Field_FormulaPlaceholder}
                   multiline={true}
                   rows={2}
-                  description='Reference other questions by their text in braces. Supports + - * / ( ) and round, min, max, sum, avg.'
+                  description={strings.Designer_Field_FormulaDescription}
                   onChange={(_e, v) => set({ formula: v })}
                 />
                 {formulaProblem() ? (
@@ -645,11 +671,13 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                   )
                 )}
                 <p className={styles.panelHint}>
-                  Available questions:{' '}
-                  {inputFields(props.definition)
-                    .filter((f) => f.id !== field.id && (f.title || '').trim())
-                    .map((f) => '{' + f.title + '}')
-                    .join(', ') || 'none yet'}
+                  {formatString(strings.Designer_Field_AvailableQuestions, {
+                    questions:
+                      inputFields(props.definition)
+                        .filter((f) => f.id !== field.id && (f.title || '').trim())
+                        .map((f) => '{' + f.title + '}')
+                        .join(', ') || strings.Designer_Field_NoneYet
+                  })}
                 </p>
               </>
             )}
@@ -657,17 +685,17 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
             {field.type === FieldType.Slider && (
               <div className={styles.inlineFields}>
                 <TextField
-                  label="Minimum"
+                  label={strings.Designer_Field_Minimum}
                   value={field.min === undefined ? '0' : String(field.min)}
                   onChange={(_e, v) => set({ min: numberOrUndefined(v) })}
                 />
                 <TextField
-                  label="Maximum"
+                  label={strings.Designer_Field_Maximum}
                   value={field.max === undefined ? '10' : String(field.max)}
                   onChange={(_e, v) => set({ max: numberOrUndefined(v) })}
                 />
                 <TextField
-                  label="Step"
+                  label={strings.Designer_Field_Step}
                   value={field.step === undefined ? '1' : String(field.step)}
                   onChange={(_e, v) => set({ step: numberOrUndefined(v) })}
                 />
@@ -678,40 +706,40 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
               <>
                 <div className={styles.inlineFields}>
                   <TextField
-                    label="From"
+                    label={strings.Designer_Field_From}
                     value={field.min === undefined ? '1' : String(field.min)}
                     onChange={(_e, v) => set({ min: numberOrUndefined(v) })}
                   />
                   <TextField
-                    label="To"
+                    label={strings.Designer_Field_To}
                     value={field.max === undefined ? '5' : String(field.max)}
                     onChange={(_e, v) => set({ max: numberOrUndefined(v) })}
                   />
                   <TextField
-                    label="Step"
+                    label={strings.Designer_Field_Step}
                     value={field.step === undefined ? '1' : String(field.step)}
                     onChange={(_e, v) => set({ step: numberOrUndefined(v) })}
                   />
                 </div>
                 <div className={styles.inlineFields}>
                   <TextField
-                    label="Label at the low end"
+                    label={strings.Designer_Field_LowLabel}
                     value={field.lowLabel || ''}
-                    placeholder="Not at all likely"
+                    placeholder={strings.Designer_Field_LowLabelPlaceholder}
                     onChange={(_e, v) => set({ lowLabel: v })}
                   />
                   <TextField
-                    label="Label at the high end"
+                    label={strings.Designer_Field_HighLabel}
                     value={field.highLabel || ''}
-                    placeholder="Extremely likely"
+                    placeholder={strings.Designer_Field_HighLabelPlaceholder}
                     onChange={(_e, v) => set({ highLabel: v })}
                   />
                 </div>
                 <Dropdown
-                  label="Summarize as"
+                  label={strings.Designer_Field_SummarizeAs}
                   options={[
-                    { key: 'average', text: 'Average and distribution' },
-                    { key: 'nps', text: 'Net Promoter Score (needs a 0–10 scale)' }
+                    { key: 'average', text: strings.Designer_Field_SummarizeAverage },
+                    { key: 'nps', text: strings.Designer_Field_SummarizeNps }
                   ]}
                   selectedKey={field.scaleAnalytics || 'average'}
                   onChange={(_e, option) =>
@@ -720,7 +748,7 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                 />
                 {field.scaleAnalytics === 'nps' && (field.min !== 0 || field.max !== 10) && (
                   <MessageBar messageBarType={MessageBarType.warning}>
-                    Net Promoter Score is only meaningful on a 0–10 scale. Set From to 0 and To to 10.
+                    {strings.Designer_Field_NpsWarning}
                   </MessageBar>
                 )}
               </>
@@ -730,12 +758,12 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
               <>
                 <div className={styles.inlineFields}>
                   <TextField
-                    label="Number of icons"
+                    label={strings.Designer_Field_NumberOfIcons}
                     value={String(field.maxRating || 5)}
                     onChange={(_e, v) => set({ maxRating: numberOrUndefined(v) })}
                   />
                   <Dropdown
-                    label="Icon"
+                    label={strings.Designer_Field_Icon}
                     options={RATING_ICONS}
                     selectedKey={field.ratingIcon || 'star'}
                     onChange={(_e, option) =>
@@ -744,7 +772,7 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                   />
                 </div>
                 <Toggle
-                  label="Allow half values"
+                  label={strings.Designer_Field_AllowHalf}
                   checked={field.allowHalfRating === true}
                   onChange={(_e, checked) => set({ allowHalfRating: checked === true })}
                 />
@@ -756,46 +784,46 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                 {field.type === FieldType.Choice && (
                   <>
                     <Dropdown
-                      label="Show options as"
+                      label={strings.Designer_Field_ShowOptionsAs}
                       options={[
-                        { key: 'buttons', text: 'Inline buttons' },
-                        { key: 'dropdown', text: 'Dropdown' }
+                        { key: 'buttons', text: strings.Designer_Field_DisplayButtons },
+                        { key: 'dropdown', text: strings.Designer_Field_DisplayDropdown }
                       ]}
                       selectedKey={field.choiceDisplay || undefined}
-                      placeholder="Automatic (inline up to 6 options)"
+                      placeholder={strings.Designer_Field_DisplayAutomatic}
                       onChange={(_e, option) =>
                         option && set({ choiceDisplay: option.key === 'buttons' ? 'buttons' : 'dropdown' })
                       }
                     />
                     <Toggle
-                      label='Add a write-in "Other" option'
+                      label={strings.Designer_Field_AllowOther}
                       checked={field.allowOther === true}
                       onChange={(_e, checked) => set({ allowOther: checked === true })}
                     />
                     {field.allowOther && (
                       <TextField
-                        label='Label for the "Other" option'
+                        label={strings.Designer_Field_OtherLabel}
                         value={field.otherLabel || ''}
-                        placeholder="Other"
+                        placeholder={strings.Designer_Field_OtherPlaceholder}
                         onChange={(_e, v) => set({ otherLabel: v })}
                       />
                     )}
                   </>
                 )}
                 <Toggle
-                  label="Shuffle the option order for each respondent"
+                  label={strings.Designer_Field_ShuffleOptions}
                   checked={field.shuffleOptions === true}
                   onChange={(_e, checked) => set({ shuffleOptions: checked === true })}
                 />
                 {field.allowMultiple && (
                   <div className={styles.inlineFields}>
                     <TextField
-                      label="Minimum selections"
+                      label={strings.Designer_Field_MinSelections}
                       value={field.minSelections === undefined ? '' : String(field.minSelections)}
                       onChange={(_e, v) => set({ minSelections: numberOrUndefined(v) })}
                     />
                     <TextField
-                      label="Maximum selections"
+                      label={strings.Designer_Field_MaxSelections}
                       value={field.maxSelections === undefined ? '' : String(field.maxSelections)}
                       onChange={(_e, v) => set({ maxSelections: numberOrUndefined(v) })}
                     />
@@ -807,46 +835,49 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
             {field.type === FieldType.Lookup && (
               <>
                 <Dropdown
-                  label="Source list"
+                  label={strings.Designer_Field_SourceList}
                   options={lists.map((l) => ({ key: l.id, text: l.title }))}
                   selectedKey={field.lookupListId || null}
-                  placeholder="Choose a list"
+                  placeholder={strings.Designer_Field_ChooseList}
                   onChange={(_e, option) =>
                     option && set({ lookupListId: String(option.key), lookupColumn: undefined })
                   }
                 />
                 <Dropdown
-                  label="Column to read options from"
+                  label={strings.Designer_Field_LookupColumn}
                   options={lookupColumns.map((c) => ({
                     key: c.internalName,
                     text: c.title + ' (' + c.typeAsString + ')'
                   }))}
                   selectedKey={field.lookupColumn || null}
-                  placeholder={field.lookupListId ? 'Choose a column' : 'Choose a list first'}
+                  placeholder={
+                    field.lookupListId
+                      ? strings.Designer_Field_ChooseColumn
+                      : strings.Designer_Field_ChooseListFirst
+                  }
                   disabled={!field.lookupListId}
                   onChange={(_e, option) => option && set({ lookupColumn: String(option.key) })}
                 />
                 <TextField
-                  label="Filter (optional)"
+                  label={strings.Designer_Field_LookupFilter}
                   value={field.lookupFilter || ''}
                   placeholder="Status eq 'Active'"
-                  description="An OData filter narrowing which source items become options"
+                  description={strings.Designer_Field_LookupFilterDescription}
                   onChange={(_e, v) => set({ lookupFilter: v })}
                 />
                 <MessageBar messageBarType={MessageBarType.info}>
-                  Answers store the option text, not a link to the source item, so responses stay
-                  readable even if the source list changes later.
+                  {strings.Designer_Field_LookupInfo}
                 </MessageBar>
               </>
             )}
 
             {field.type === FieldType.Consent && (
               <TextField
-                label="Terms shown above the checkbox"
+                label={strings.Designer_Field_ConsentText}
                 multiline={true}
                 rows={5}
                 value={field.consentText || ''}
-                description="Basic formatting is allowed: bold, italic, lists and links."
+                description={strings.Designer_Field_BasicFormatting}
                 onChange={(_e, v) => set({ consentText: v })}
               />
             )}
@@ -854,13 +885,13 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
             {field.type === FieldType.Person && (
               <>
                 <Toggle
-                  label="Allow multiple people"
+                  label={strings.Designer_Field_AllowMultiplePeople}
                   checked={field.allowMultiplePeople === true}
                   disabled={field.provisioned === true}
                   onChange={(_e, checked) => set({ allowMultiplePeople: checked === true })}
                 />
                 <Toggle
-                  label="Also allow groups"
+                  label={strings.Designer_Field_AllowGroups}
                   checked={field.allowGroups === true}
                   onChange={(_e, checked) => set({ allowGroups: checked === true })}
                 />
@@ -870,14 +901,14 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
             {field.type === FieldType.Date && (
               <>
                 <Toggle
-                  label="Include a time of day"
+                  label={strings.Designer_Field_IncludeTime}
                   checked={field.includeTime === true}
                   disabled={field.provisioned === true}
                   onChange={(_e, checked) => set({ includeTime: checked === true })}
                 />
                 {field.includeTime && (
                   <TextField
-                    label="Time step (minutes)"
+                    label={strings.Designer_Field_TimeStep}
                     value={String(field.timeStepMinutes || 15)}
                     onChange={(_e, v) => set({ timeStepMinutes: numberOrUndefined(v) })}
                   />
@@ -887,7 +918,7 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
 
             {field.type === FieldType.Time && (
               <TextField
-                label="Time step (minutes)"
+                label={strings.Designer_Field_TimeStep}
                 value={String(field.timeStepMinutes || 15)}
                 onChange={(_e, v) => set({ timeStepMinutes: numberOrUndefined(v) })}
               />
@@ -897,21 +928,21 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
               <>
                 <div className={styles.inlineFields}>
                   <TextField
-                    label="Maximum files"
+                    label={strings.Designer_Field_MaxFiles}
                     value={String(field.maxFiles || 3)}
                     onChange={(_e, v) => set({ maxFiles: numberOrUndefined(v) })}
                   />
                   <TextField
-                    label="Max size each (MB)"
+                    label={strings.Designer_Field_MaxFileSize}
                     value={String(field.maxFileSizeMb || 10)}
                     onChange={(_e, v) => set({ maxFileSizeMb: numberOrUndefined(v) })}
                   />
                 </div>
                 <TextField
-                  label="Accepted file types"
+                  label={strings.Designer_Field_AcceptedTypes}
                   value={(field.allowedExtensions || []).join(', ')}
                   placeholder="pdf, docx, png"
-                  description="Comma-separated extensions. Leave blank to accept anything SharePoint allows."
+                  description={strings.Designer_Field_AcceptedTypesDescription}
                   onChange={(_e, v) =>
                     set({
                       allowedExtensions: (v || '')
@@ -922,15 +953,14 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
                   }
                 />
                 <MessageBar messageBarType={MessageBarType.info}>
-                  Files are saved as attachments on the response item. SharePoint blocks some
-                  extensions (such as .exe) regardless of what you allow here.
+                  {strings.Designer_Field_FilesInfo}
                 </MessageBar>
               </>
             )}
 
             {(field.type === FieldType.MultilineText || field.type === FieldType.RichText) && (
               <TextField
-                label="Rows"
+                label={strings.Designer_Field_Rows}
                 value={String(field.rows || (field.type === FieldType.RichText ? 6 : 4))}
                 onChange={(_e, v) => set({ rows: numberOrUndefined(v) })}
               />
@@ -938,9 +968,10 @@ export const FieldEditorPanel: React.FunctionComponent<IFieldEditorPanelProps> =
 
             {field.provisioned && (
               <p className={styles.panelHint}>
-                <Icon iconName="Lock" /> This question already has a list column
-                (<strong>{field.internalName}</strong>). Settings that change the column&apos;s type
-                are locked — duplicate the question if you need a different type.
+                <Icon iconName="Lock" />{' '}
+                {strings.Designer_Field_ProvisionedNote.split('{name}')[0]}
+                <strong>{field.internalName}</strong>
+                {strings.Designer_Field_ProvisionedNote.split('{name}').slice(1).join('{name}')}
               </p>
             )}
       </>

@@ -9,6 +9,9 @@ import '@pnp/sp/profiles';
 import '@pnp/sp/security';
 import '@pnp/sp/sputilities';
 import '@pnp/sp/attachments';
+import '@pnp/sp/files';
+import '@pnp/sp/folders';
+import '@pnp/sp/site-groups/web';
 import '@pnp/sp/batching';
 import { PermissionKind } from '@pnp/sp/security';
 import { PrincipalType } from '@pnp/sp/types';
@@ -47,11 +50,15 @@ import {
   valueAsComparableString
 } from '../utils/formUtils';
 import {
+  APPROVAL_COLUMNS,
   buildFieldXml,
   decimalsAttribute,
   FIELD_GROUP,
   lcidForCurrencySymbol,
   noteLines,
+  SF_APPROVAL_COMMENT_INTERNAL_NAME,
+  SF_APPROVAL_STATUS_INTERNAL_NAME,
+  SF_REVIEWED_BY_INTERNAL_NAME,
   SF_DURATION_INTERNAL_NAME,
   SF_STATUS_INTERNAL_NAME,
   spTypeForField,
@@ -59,6 +66,8 @@ import {
   typeMatchesExisting
 } from '../utils/spFieldXml';
 import { logWarning } from '../utils/debug';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../utils/localeUtils';
 
 /** Options value for AddFieldInternalNameHint — honor the Name attribute. */
 const ADD_FIELD_INTERNAL_NAME_HINT = 8;
@@ -86,12 +95,88 @@ export interface ISubmitOptions {
   durationSeconds?: number;
   /** promote this existing draft item instead of creating a new one */
   replaceItemId?: number;
+  /** BCP 47 locale for the default item title date (defaults to the browser's) */
+  locale?: string;
 }
 
 export interface IDraft {
   id: number;
   values: IFormValues;
+  /** titles of file/signature questions whose stored file could not be restored; the user must re-provide them */
+  missingFiles: string[];
+  /** field ids matching missingFiles */
+  missingFileFieldIds: string[];
 }
+
+/** Result of a save that also uploads attachments. */
+export interface ISubmitResult {
+  id: number;
+  /** original names of files (or "Signature") that could not be attached */
+  failedAttachments: string[];
+}
+
+export type ApprovalStatus = 'Pending' | 'Approved' | 'Rejected';
+
+/** A response item plus approval-workflow fields (all undefined when approval is not provisioned). */
+export interface IResponseItemEx extends IResponseItem {
+  approvalStatus?: ApprovalStatus;
+  approvalComment?: string;
+  reviewedBy?: string;
+}
+
+export interface IResponsePageEx extends IResponsePage {
+  items: IResponseItemEx[];
+}
+
+export interface IFormVersionInfo {
+  versionId: number;
+  label: string;
+  created: string;
+  createdBy: string;
+}
+
+export interface ILookupOptionsResult {
+  values: string[];
+  /** true when the source list had more rows than were read */
+  truncated: boolean;
+}
+
+/** Defaults for the new Service_ strings, used until the localized bundle carries them. */
+const SERVICE_STRING_DEFAULTS: { [key: string]: string } = {
+  Service_Item_DefaultTitle: 'Response — {date}',
+  Service_Email_ApprovalSubject: 'Your response was {status} — {title}',
+  Service_Email_ApprovalHeading: 'Your response was {status}',
+  Service_Email_ApprovalIntro: 'A reviewer marked your response to "{title}" as {status}.',
+  Service_Email_ApprovalCommentLabel: 'Reviewer comment',
+  Service_Approval_Approved: 'approved',
+  Service_Approval_Rejected: 'rejected',
+  Service_Approval_Pending: 'pending',
+  Service_Lookup_InvalidFilter: 'The lookup filter is not valid.',
+  Service_Edit_NotAllowed: 'This form does not allow editing a submitted response.',
+  Service_Edit_NotYours: 'You can only edit your own response.',
+  Service_Signature_AttachmentLabel: 'Signature'
+};
+
+const svc = (key: string, params?: { [k: string]: string | number }): string => {
+  const localized = (strings as unknown as { [k: string]: string | undefined })[key];
+  const template = localized || SERVICE_STRING_DEFAULTS[key] || key;
+  return params ? formatString(template, params) : template;
+};
+
+/** Max lookup rows read from a source list. */
+const MAX_LOOKUP_ITEMS = 10000;
+
+/** Person/lookup joins allowed per request (SharePoint caps a query at 12). */
+const MAX_JOINS_PER_REQUEST = 8;
+
+/** Rough budget for the characters in one $select, keeping the URL under limits. */
+const SELECT_CHAR_BUDGET = 1400;
+
+/** Items per delete batch. */
+const BATCH_SIZE = 100;
+
+/** Id window walked when a filter trips the list view threshold. */
+const ID_WINDOW = 4000;
 
 export interface IProvisionResult {
   definition: IFormDefinition;
@@ -137,7 +222,10 @@ export class SharePointService {
   }
 
   /** Cache of lookup option sets, keyed by list + column + filter. */
-  private lookupCache: { [key: string]: string[] } = {};
+  private lookupCache: { [key: string]: ILookupOptionsResult } = {};
+
+  private backfilled: { [listId: string]: Promise<void> } = {};
+  private approvalEnsured: { [listId: string]: Promise<void> } = {};
 
   /** In-flight (or completed) attempt to ensure the config list exists, so concurrent
    *  saves don't race to create it twice; cleared on failure so the next call retries. */
@@ -182,6 +270,7 @@ export class SharePointService {
             Options: ADD_FIELD_INTERNAL_NAME_HINT
           });
         }
+        await this.tuneConfigList(result.list);
       })().catch((error) => {
         // let the next call retry rather than caching a permanent failure
         this.configListEnsured = undefined;
@@ -189,6 +278,60 @@ export class SharePointService {
       });
     }
     return this.configListEnsured;
+  }
+
+  /**
+   * Best-effort hardening of the configuration list: keep version history (so
+   * an earlier definition can be restored) and make the list read-only for site
+   * members, so a form's definition can't be altered by everyone who can open
+   * the site. Owners / full control keep write, as does the current user (who
+   * is by definition managing the form). Failures never block.
+   */
+  private async tuneConfigList(list: IList): Promise<void> {
+    try {
+      await list.update({ EnableVersioning: true, MajorVersionLimit: 50 });
+    } catch (error) {
+      logWarning('enabling versioning on the configuration list (non-fatal)', error);
+    }
+    try {
+      const info: { HasUniqueRoleAssignments: boolean } = await list.select('HasUniqueRoleAssignments')();
+      if (info.HasUniqueRoleAssignments) {
+        return;
+      }
+      const web = this.sp.web;
+      const [memberGroup, readDefs, editDefs, contributeDefs, me] = await Promise.all([
+        web.associatedMemberGroup.select('Id')(),
+        web.roleDefinitions.filter('RoleTypeKind eq 2').select('Id')(),
+        web.roleDefinitions.filter('RoleTypeKind eq 6').select('Id')(),
+        web.roleDefinitions.filter('RoleTypeKind eq 3').select('Id')(),
+        web.currentUser.select('Id')()
+      ]);
+      await list.breakRoleInheritance(true, false);
+      // the person managing the form keeps write before members lose it
+      if (editDefs.length > 0) {
+        await list.roleAssignments.add(me.Id, editDefs[0].Id);
+      }
+      if (readDefs.length > 0) {
+        await list.roleAssignments.add(memberGroup.Id, readDefs[0].Id);
+      }
+      for (const def of [...editDefs, ...contributeDefs]) {
+        try {
+          await list.roleAssignments.remove(memberGroup.Id, def.Id);
+        } catch {
+          // the group may not hold this binding
+        }
+      }
+    } catch (error) {
+      logWarning('restricting the configuration list to read-only for members (non-fatal)', error);
+    }
+  }
+
+  /**
+   * Owner path: create the configuration list if needed (and tighten it).
+   * Non-owners never call this; they only read.
+   */
+  public async ensureFormConfigStore(): Promise<void> {
+    await this.ensureConfigList();
   }
 
   /** Save (or create) a form's definition, keyed by its web part instance id. */
@@ -205,10 +348,24 @@ export class SharePointService {
     }
   }
 
-  /** The durably-stored definition for a web part instance, if one has been saved yet. */
-  public async loadFormDefinition(instanceId: string): Promise<string | undefined> {
+  /**
+   * The durably-stored definition for a web part instance, if one has been saved.
+   * Read-only by default: it never creates the configuration list or changes
+   * anything, so it is safe for any viewer. The owner path passes
+   * `createIfMissing` to provision the list (and tighten it) first.
+   */
+  public async loadFormDefinition(
+    instanceId: string,
+    createIfMissing?: boolean
+  ): Promise<string | undefined> {
     try {
-      await this.ensureConfigList();
+      if (createIfMissing === true) {
+        try {
+          await this.ensureConfigList();
+        } catch (error) {
+          logWarning('ensuring the configuration list (non-fatal)', error);
+        }
+      }
       const list = this.sp.web.lists.getByTitle(CONFIG_LIST_TITLE);
       const key = this.escapeODataString(instanceId);
       const items = await list.items
@@ -222,6 +379,58 @@ export class SharePointService {
     } catch {
       return undefined;
     }
+  }
+
+  private async configItemId(instanceId: string): Promise<number | undefined> {
+    const list = this.sp.web.lists.getByTitle(CONFIG_LIST_TITLE);
+    const key = this.escapeODataString(instanceId);
+    const items = await list.items.select('Id').filter("Title eq '" + key + "'").top(1)();
+    return items.length > 0 ? (items[0].Id as number) : undefined;
+  }
+
+  /** Saved versions of a form's definition, newest first. Empty when unavailable. */
+  public async listFormVersions(instanceId: string): Promise<IFormVersionInfo[]> {
+    try {
+      const id = await this.configItemId(instanceId);
+      if (id === undefined) {
+        return [];
+      }
+      const rows: Record<string, unknown>[] = await this.sp.web.lists
+        .getByTitle(CONFIG_LIST_TITLE)
+        .items.getById(id)
+        .versions();
+      const nameOf = (value: unknown): string => {
+        const v = value as { LookupValue?: string; Title?: string; Email?: string } | string | undefined;
+        if (!v) {
+          return '';
+        }
+        return typeof v === 'string' ? v : v.LookupValue || v.Title || v.Email || '';
+      };
+      return rows
+        .map((r) => ({
+          versionId: Number(r.VersionId),
+          label: String(r.VersionLabel || ''),
+          created: String(r.Created || ''),
+          createdBy: nameOf(r.CreatedBy) || nameOf(r.Editor)
+        }))
+        .filter((v) => !isNaN(v.versionId))
+        .sort((a, b) => b.versionId - a.versionId);
+    } catch {
+      return [];
+    }
+  }
+
+  /** The definition JSON stored in one saved version (restore = save it again). */
+  public async getFormVersion(instanceId: string, versionId: number): Promise<string> {
+    const id = await this.configItemId(instanceId);
+    if (id === undefined) {
+      throw new Error('Form definition not found');
+    }
+    const row: Record<string, unknown> = await this.sp.web.lists
+      .getByTitle(CONFIG_LIST_TITLE)
+      .items.getById(id)
+      .versions.getById(versionId)();
+    return String(row[CONFIG_DEFINITION_FIELD] || '');
   }
 
   // -------------------------------------------------------------------------
@@ -283,36 +492,70 @@ export class SharePointService {
    * Cached per list+column+filter for the lifetime of the page: a form with the
    * same lookup on several questions would otherwise refetch per control.
    */
-  public async getLookupOptions(
+  public async getLookupOptions(listId: string, column: string, filter?: string): Promise<string[]> {
+    return (await this.getLookupOptionsEx(listId, column, filter)).values;
+  }
+
+  /**
+   * As getLookupOptions, but also says whether the source list was larger than
+   * what was read (up to 10,000 rows, read in pages). The column name and filter
+   * are validated: the filter is spliced into the request URL, so anything that
+   * could start another query option or break out of a quoted string is rejected.
+   */
+  public async getLookupOptionsEx(
     listId: string,
     column: string,
     filter?: string
-  ): Promise<string[]> {
-    const key = listId + '|' + column + '|' + (filter || '');
+  ): Promise<ILookupOptionsResult> {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column || '')) {
+      throw new Error(svc('Service_Lookup_InvalidFilter'));
+    }
+    const cleanFilter = (filter || '').trim();
+    if (cleanFilter.length > 0) {
+      const quotes = cleanFilter.split("'").length - 1;
+      if (cleanFilter.length > 500 || /[&#\r\n]/.test(cleanFilter) || quotes % 2 !== 0) {
+        throw new Error(svc('Service_Lookup_InvalidFilter'));
+      }
+    }
+    const key = listId + '|' + column + '|' + cleanFilter;
     if (this.lookupCache[key]) {
       return this.lookupCache[key];
     }
     let query = this.list(listId).items.select(column).top(2000).orderBy(column, true);
-    if (filter && filter.trim().length > 0) {
-      query = query.filter(filter.trim());
+    if (cleanFilter.length > 0) {
+      query = query.filter(cleanFilter);
     }
-    const items = await query();
     const seen: { [value: string]: boolean } = {};
     const values: string[] = [];
-    items.forEach((item: Record<string, unknown>) => {
-      const raw = item[column];
-      if (raw === undefined || raw === null || raw === '') {
-        return;
+    let read = 0;
+    let truncated = false;
+    let page = await query.getPaged();
+    for (;;) {
+      (page.results || []).forEach((item: Record<string, unknown>) => {
+        read++;
+        const raw = item[column];
+        if (raw === undefined || raw === null || raw === '') {
+          return;
+        }
+        const text = String(raw).trim();
+        if (text.length === 0 || seen[text]) {
+          return;
+        }
+        seen[text] = true;
+        values.push(text);
+      });
+      if (!page.hasNext) {
+        break;
       }
-      const text = String(raw).trim();
-      if (text.length === 0 || seen[text]) {
-        return;
+      if (read >= MAX_LOOKUP_ITEMS) {
+        truncated = true;
+        break;
       }
-      seen[text] = true;
-      values.push(text);
-    });
-    this.lookupCache[key] = values;
-    return values;
+      page = await page.getNext();
+    }
+    const result = { values, truncated };
+    this.lookupCache[key] = result;
+    return result;
   }
 
   public clearLookupCache(): void {
@@ -351,7 +594,11 @@ export class SharePointService {
    * better part of a minute. Adding a field to the default view is folded into
    * the same worker so each column costs one slot, not two passes.
    */
-  public async ensureFields(listId: string, definition: IFormDefinition): Promise<IProvisionResult> {
+  public async ensureFields(
+    listId: string,
+    definition: IFormDefinition,
+    enableApproval?: boolean
+  ): Promise<IProvisionResult> {
     const list = this.list(listId);
     const existing: { InternalName: string; TypeAsString: string }[] = await list.fields.select(
       'InternalName',
@@ -403,7 +650,33 @@ export class SharePointService {
     });
 
     // system columns: status (indexed, used by every responses query) and duration
-    await mapWithConcurrency(SYSTEM_COLUMNS, PROVISION_CONCURRENCY, async (column): Promise<undefined> => {
+    await this.createSystemColumns(list, SYSTEM_COLUMNS, existingByName, created);
+    if (enableApproval === true) {
+      await this.createSystemColumns(list, APPROVAL_COLUMNS, existingByName, created);
+    }
+    // the author filter (edit my response, one-per-person check) needs an index
+    // to stay legal past the 5,000-item threshold
+    try {
+      await list.fields.getByInternalNameOrTitle('Author').update({ Indexed: true });
+    } catch (error) {
+      logWarning('indexing the Author column (non-fatal)', error);
+    }
+
+    fields.forEach((field) => {
+      const conflicted = conflicts.filter((c) => c.field.id === field.id).length > 0;
+      field.provisioned = !conflicted;
+    });
+
+    return { definition: updated, created, conflicts };
+  }
+
+  private async createSystemColumns(
+    list: IList,
+    columns: { internalName: string; xml: () => string }[],
+    existingByName: { [lower: string]: string },
+    created: string[]
+  ): Promise<void> {
+    await mapWithConcurrency(columns, PROVISION_CONCURRENCY, async (column): Promise<undefined> => {
       if (existingByName[column.internalName.toLowerCase()] !== undefined) {
         return undefined;
       }
@@ -424,13 +697,6 @@ export class SharePointService {
       }
       return undefined;
     });
-
-    fields.forEach((field) => {
-      const conflicted = conflicts.filter((c) => c.field.id === field.id).length > 0;
-      field.provisioned = !conflicted;
-    });
-
-    return { definition: updated, created, conflicts };
   }
 
   /** Push title/description/choice changes to a column that already exists. */
@@ -585,8 +851,6 @@ export class SharePointService {
       }
     } else if (spType === 'Currency') {
       props.Decimals = field.decimalPlaces === undefined ? 2 : field.decimalPlaces;
-    } else if (spType === 'Boolean') {
-      props.DefaultValue = '0';
     }
     await added.field.update(props);
 
@@ -604,6 +868,15 @@ export class SharePointService {
     } else if (internalName === SF_DURATION_INTERNAL_NAME) {
       const added = await list.fields.addNumber(internalName, {});
       await added.field.update({ Title: 'Time to complete (seconds)', Group: FIELD_GROUP, Decimals: 0 });
+    } else if (internalName === SF_APPROVAL_STATUS_INTERNAL_NAME) {
+      const added = await list.fields.addChoice(internalName, { Choices: ['Pending', 'Approved', 'Rejected'] });
+      await added.field.update({ Title: 'Approval status', Group: FIELD_GROUP, DefaultValue: 'Pending' });
+    } else if (internalName === SF_APPROVAL_COMMENT_INTERNAL_NAME) {
+      const added = await list.fields.addMultilineText(internalName, { NumberOfLines: 3, RichText: false });
+      await added.field.update({ Title: 'Approval comment', Group: FIELD_GROUP });
+    } else if (internalName === SF_REVIEWED_BY_INTERNAL_NAME) {
+      const added = await list.fields.addText(internalName, { MaxLength: 255 });
+      await added.field.update({ Title: 'Reviewed by', Group: FIELD_GROUP });
     }
   }
 
@@ -631,7 +904,9 @@ export class SharePointService {
 
   private async buildPayload(
     definition: IFormDefinition,
-    values: IFormValues
+    values: IFormValues,
+    locale?: string,
+    clearMissing?: boolean
   ): Promise<Record<string, unknown>> {
     const payload: Record<string, unknown> = {};
     const fields = inputFields(definition);
@@ -646,15 +921,37 @@ export class SharePointService {
       }
     }
 
-    payload.Title = this.buildItemTitle(definition, values);
+    if (clearMissing === true) {
+      // updating an existing item (draft, edit): anything not in the payload must
+      // be blanked, or a stale answer from an earlier save would survive
+      fields.forEach((field) => {
+        if (field.provisioned === false) {
+          return;
+        }
+        const key = this.payloadKey(field);
+        if (payload[key] === undefined) {
+          payload[key] = this.emptyValueFor(field);
+        }
+      });
+    }
+
+    payload.Title = this.buildItemTitle(definition, values, locale);
     return payload;
+  }
+
+  private emptyValueFor(field: IFormField): unknown {
+    const multi =
+      (field.type === FieldType.Choice && field.allowMultiple === true) ||
+      (field.type === FieldType.Person && field.allowMultiplePeople === true);
+    return multi ? [] : null;
   }
 
   /**
    * Save a submission. Attachments can only be added after the item exists, so
    * the item is created (or a resumed draft promoted) first and files are
    * uploaded second; a failed upload doesn't roll the response back, since a
-   * response with a missing attachment beats no response at all.
+   * response with a missing attachment beats no response at all. Use
+   * submitResponseDetailed to learn which attachments failed.
    */
   public async submitResponse(
     listId: string,
@@ -662,23 +959,34 @@ export class SharePointService {
     values: IFormValues,
     options?: ISubmitOptions
   ): Promise<number> {
-    const payload = await this.buildPayload(definition, values);
+    return (await this.submitResponseDetailed(listId, definition, values, options)).id;
+  }
+
+  /** As submitResponse, but reports attachments that could not be saved. */
+  public async submitResponseDetailed(
+    listId: string,
+    definition: IFormDefinition,
+    values: IFormValues,
+    options?: ISubmitOptions
+  ): Promise<ISubmitResult> {
+    const existing = options && typeof options.replaceItemId === 'number';
+    const payload = await this.buildPayload(definition, values, options && options.locale, existing);
     payload[SF_STATUS_INTERNAL_NAME] = 'Complete';
     if (options && typeof options.durationSeconds === 'number') {
       payload[SF_DURATION_INTERNAL_NAME] = options.durationSeconds;
     }
 
     let itemId: number;
-    if (options && typeof options.replaceItemId === 'number') {
-      await this.list(listId).items.getById(options.replaceItemId).update(payload);
-      itemId = options.replaceItemId;
+    if (existing) {
+      itemId = options.replaceItemId as number;
+      await this.list(listId).items.getById(itemId).update(payload);
     } else {
       const result = await this.list(listId).items.add(payload);
       itemId = result.data.Id;
     }
 
-    await this.uploadAttachments(listId, itemId, definition, values);
-    return itemId;
+    const failed = await this.uploadAttachments(listId, itemId, definition, values, existing === true);
+    return { id: itemId, failedAttachments: failed };
   }
 
   /** Save (or update) a partial response the respondent can come back to. */
@@ -686,85 +994,258 @@ export class SharePointService {
     listId: string,
     definition: IFormDefinition,
     values: IFormValues,
-    existingId?: number
+    existingId?: number,
+    locale?: string
   ): Promise<number> {
-    const payload = await this.buildPayload(definition, values);
-    payload[SF_STATUS_INTERNAL_NAME] = 'Draft';
-    if (typeof existingId === 'number') {
-      await this.list(listId).items.getById(existingId).update(payload);
-      return existingId;
-    }
-    const result = await this.list(listId).items.add(payload);
-    return result.data.Id;
+    return (await this.saveDraftDetailed(listId, definition, values, existingId, locale)).id;
   }
 
-  /** The current user's most recent draft for this list, if any. */
+  /**
+   * As saveDraft, but reports attachments that could not be saved. Files and
+   * signatures are stored as attachments, exactly as on submit, so a resumed
+   * draft gets them back.
+   */
+  public async saveDraftDetailed(
+    listId: string,
+    definition: IFormDefinition,
+    values: IFormValues,
+    existingId?: number,
+    locale?: string
+  ): Promise<ISubmitResult> {
+    const existing = typeof existingId === 'number';
+    const payload = await this.buildPayload(definition, values, locale, existing);
+    payload[SF_STATUS_INTERNAL_NAME] = 'Draft';
+    let itemId: number;
+    if (existing) {
+      itemId = existingId as number;
+      await this.list(listId).items.getById(itemId).update(payload);
+    } else {
+      const result = await this.list(listId).items.add(payload);
+      itemId = result.data.Id;
+    }
+    const failed = await this.uploadAttachments(listId, itemId, definition, values, existing);
+    return { id: itemId, failedAttachments: failed };
+  }
+
+  /**
+   * The current user's most recent draft for this list, if any. File and
+   * signature answers are returned only when their attachment is really stored;
+   * otherwise they are left empty and listed in `missingFiles` so the form can
+   * ask the user to provide them again.
+   */
   public async loadDraft(listId: string, definition: IFormDefinition): Promise<IDraft | undefined> {
     try {
       const me = await this.sp.web.currentUser.select('Id')();
       const fields = inputFields(definition).filter((f) => f.provisioned !== false);
-      const { selects, expands } = this.selectsFor(fields);
-      const items = await this.list(listId)
-        .items.select(...selects)
-        .expand(...expands)
-        .filter(SF_STATUS_INTERNAL_NAME + " eq 'Draft' and AuthorId eq " + me.Id)
-        .orderBy('Id', false)
-        .top(1)();
+      const plan = this.planSelects(fields, false);
+      const items = await this.readItems(
+        listId,
+        plan,
+        SF_STATUS_INTERNAL_NAME + " eq 'Draft' and AuthorId eq " + me.Id,
+        1
+      );
       if (items.length === 0) {
         return undefined;
       }
-      const item = items[0] as Record<string, unknown>;
-      const values: IFormValues = {};
-      fields.forEach((field) => {
-        const normalized = normalizeFromSharePoint(field, item[field.internalName]);
-        if (normalized !== undefined) {
-          values[field.id] = normalized;
-        }
-      });
-      return { id: item.Id as number, values };
+      return await this.itemToDraft(listId, items[0], fields);
     } catch {
       return undefined;
     }
   }
 
   /**
-   * Number of completed responses, used by the response-cap check.
-   *
-   * Pages over ids only. There's no filtered-count endpoint in the REST surface
-   * PnPjs exposes, and the list's own ItemCount would include drafts, so an
-   * id-only sweep is both correct and cheap.
+   * Values of one of the current user's own responses, shaped for the form
+   * (edit-my-response). Same file/signature rules as loadDraft.
    */
-  public async countResponses(listId: string): Promise<number> {
+  public async loadResponseForEdit(
+    listId: string,
+    definition: IFormDefinition,
+    itemId: number
+  ): Promise<IDraft | undefined> {
     try {
-      let page = await this.list(listId)
-        .items.select('Id')
-        .filter(SF_STATUS_INTERNAL_NAME + " ne 'Draft'")
-        .top(2000)
-        .getPaged();
-      let count = (page.results || []).length;
-      while (page.hasNext && count < MAX_RESPONSES) {
-        page = await page.getNext();
-        count += (page.results || []).length;
-      }
-      return count;
+      const fields = inputFields(definition).filter((f) => f.provisioned !== false);
+      const plan = this.planSelects(fields, false);
+      const items = await this.readItems(listId, plan, 'Id eq ' + itemId, 1);
+      return items.length === 0 ? undefined : await this.itemToDraft(listId, items[0], fields);
     } catch {
-      // a failed count must not close an open form
-      return 0;
+      return undefined;
     }
   }
 
-  /** True when the signed-in user already has a completed response. */
-  public async currentUserHasResponded(listId: string): Promise<boolean> {
-    try {
-      const me = await this.sp.web.currentUser.select('Id')();
-      const items = await this.list(listId)
-        .items.select('Id')
-        .filter(SF_STATUS_INTERNAL_NAME + " ne 'Draft' and AuthorId eq " + me.Id)
-        .top(1)();
-      return items.length > 0;
-    } catch {
-      return false;
+  private async itemToDraft(
+    listId: string,
+    item: Record<string, unknown>,
+    fields: IFormField[]
+  ): Promise<IDraft> {
+    const values: IFormValues = {};
+    const missing: IFormField[] = [];
+    const fileFields: IFormField[] = [];
+    fields.forEach((field) => {
+      if (field.type === FieldType.FileUpload || field.type === FieldType.Signature) {
+        fileFields.push(field);
+        return;
+      }
+      const normalized = normalizeFromSharePoint(field, item[field.internalName]);
+      if (normalized !== undefined) {
+        values[field.id] = normalized;
+      }
+    });
+
+    if (fileFields.length > 0) {
+      const itemId = item.Id as number;
+      const attachments = await this.listAttachments(listId, itemId);
+      for (const field of fileFields) {
+        const claimed = item[field.internalName];
+        const wasAnswered = claimed !== undefined && claimed !== null && String(claimed).length > 0;
+        const prefix = (field.internalName + '__').toLowerCase();
+        const mine = attachments.filter((a) => a.FileName.toLowerCase().indexOf(prefix) === 0);
+        const restored: IFormFile[] = [];
+        for (const att of mine) {
+          try {
+            const buffer = await this.sp.web.getFileByServerRelativePath(att.ServerRelativeUrl).getBuffer();
+            restored.push({
+              name: att.FileName.slice(prefix.length),
+              size: buffer.byteLength,
+              content: arrayBufferToBase64(buffer)
+            });
+          } catch (error) {
+            logWarning('restoring attachment "' + att.FileName + '" (non-fatal)', error);
+          }
+        }
+        if (field.type === FieldType.FileUpload) {
+          if (restored.length > 0) {
+            values[field.id] = restored;
+          }
+          const expected = wasAnswered ? String(claimed).split(';').filter((n) => n.trim().length > 0).length : 0;
+          if (wasAnswered && restored.length < expected) {
+            missing.push(field);
+          }
+        } else if (restored.length > 0) {
+          values[field.id] = 'data:image/png;base64,' + restored[0].content;
+        } else if (wasAnswered) {
+          missing.push(field);
+        }
+      }
     }
+
+    return {
+      id: item.Id as number,
+      values,
+      missingFiles: missing.map((f) => f.title),
+      missingFileFieldIds: missing.map((f) => f.id)
+    };
+  }
+
+  private async listAttachments(
+    listId: string,
+    itemId: number
+  ): Promise<{ FileName: string; ServerRelativeUrl: string }[]> {
+    try {
+      return await this.list(listId)
+        .items.getById(itemId)
+        .attachmentFiles.select('FileName', 'ServerRelativeUrl')();
+    } catch {
+      return [];
+    }
+  }
+
+  /** True when an error looks like SharePoint's list view threshold (5,000 items). */
+  private isThresholdError(e: unknown): boolean {
+    const error = e as { message?: string; status?: number };
+    return !!(error && typeof error.message === 'string' && /threshold|5000|too many items/i.test(error.message));
+  }
+
+  /**
+   * Number of completed responses, used by the response-cap check.
+   *
+   * Reads the list's own ItemCount and subtracts drafts (drafts are an indexed
+   * `eq` query, legal at any size), rather than downloading every id. Returns
+   * undefined when the count can't be determined; callers must treat that as
+   * UNKNOWN (do not close the form, do not claim zero).
+   */
+  public async countResponses(listId: string): Promise<number | undefined> {
+    try {
+      const list = this.list(listId);
+      const info: { ItemCount: number } = await list.select('ItemCount')();
+      let drafts = 0;
+      let page = await list.items
+        .select('Id')
+        .filter(SF_STATUS_INTERNAL_NAME + " eq 'Draft'")
+        .top(2000)
+        .getPaged();
+      drafts += (page.results || []).length;
+      while (page.hasNext && drafts < MAX_RESPONSES) {
+        page = await page.getNext();
+        drafts += (page.results || []).length;
+      }
+      return Math.max(0, info.ItemCount - drafts);
+    } catch (error) {
+      logWarning('counting responses (unknown)', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * True when the signed-in user already has a completed response; false when
+   * they don't; undefined when that could not be determined (treat as unknown,
+   * never as "no"). Falls back to walking Id ranges when the filter trips the
+   * list view threshold.
+   */
+  public async currentUserHasResponded(listId: string): Promise<boolean | undefined> {
+    let me: { Id: number };
+    try {
+      me = await this.sp.web.currentUser.select('Id')();
+    } catch {
+      return undefined;
+    }
+    const filter = SF_STATUS_INTERNAL_NAME + " eq 'Complete' and AuthorId eq " + me.Id;
+    try {
+      const items = await this.list(listId).items.select('Id').filter(filter).top(1)();
+      return items.length > 0;
+    } catch (error) {
+      if (!this.isThresholdError(error)) {
+        logWarning('checking for an existing response (unknown)', error);
+        return undefined;
+      }
+    }
+    try {
+      const found = await this.walkIdRanges(listId, filter, 1, ['Id']);
+      return found.length > 0;
+    } catch (error) {
+      logWarning('walking id ranges for an existing response (unknown)', error);
+      return undefined;
+    }
+  }
+
+  /** Newest-first search across descending Id windows, each small enough to stay under the threshold. */
+  private async walkIdRanges(
+    listId: string,
+    filter: string,
+    limit: number,
+    selects: string[],
+    expands?: string[]
+  ): Promise<Record<string, unknown>[]> {
+    const list = this.list(listId);
+    const top = await list.items.select('Id').orderBy('Id', false).top(1)();
+    if (top.length === 0) {
+      return [];
+    }
+    let hi = top[0].Id as number;
+    const found: Record<string, unknown>[] = [];
+    for (let i = 0; i < 100 && hi > 0 && found.length < limit; i++) {
+      const lo = Math.max(0, hi - ID_WINDOW);
+      let query = list.items.select(...selects);
+      if (expands && expands.length > 0) {
+        query = query.expand(...expands);
+      }
+      const rows = await query
+        .filter('Id gt ' + lo + ' and Id le ' + hi + ' and ' + filter)
+        .orderBy('Id', false)
+        .top(limit - found.length)();
+      rows.forEach((r: Record<string, unknown>) => found.push(r));
+      hi = lo;
+    }
+    return found;
   }
 
   /**
@@ -772,65 +1253,239 @@ export class SharePointService {
    *
    * Filenames are prefixed with the column's internal name so several upload
    * questions on one form can't collide, and so the responses view can tell
-   * which attachment belongs to which question.
+   * which attachment belongs to which question. On an existing item (resumed
+   * draft, edit) a question's earlier attachments are replaced when it has new
+   * content, or removed when the answer was cleared. Names are made unique
+   * case-insensitively. Returns the names that failed.
    */
   private async uploadAttachments(
     listId: string,
     itemId: number,
     definition: IFormDefinition,
-    values: IFormValues
-  ): Promise<void> {
-    const uploads: { name: string; content: ArrayBuffer }[] = [];
+    values: IFormValues,
+    itemExisted: boolean
+  ): Promise<string[]> {
+    interface IPlan {
+      prefix: string;
+      replace: boolean;
+      uploads: { display: string; name: string; content: ArrayBuffer }[];
+    }
+    const plans: IPlan[] = [];
 
     inputFields(definition).forEach((field) => {
-      if (!isFieldVisible(field, definition, values)) {
+      if (field.type !== FieldType.FileUpload && field.type !== FieldType.Signature) {
         return;
       }
+      const visible = isFieldVisible(field, definition, values);
+      const plan: IPlan = { prefix: field.internalName + '__', replace: false, uploads: [] };
       if (field.type === FieldType.FileUpload) {
-        const files = (values[field.id] || []) as IFormFile[];
-        files.forEach((file) => {
-          if (!file.content) {
-            return;
-          }
-          uploads.push({
+        const files = visible && Array.isArray(values[field.id]) ? (values[field.id] as IFormFile[]) : [];
+        const withContent = files.filter((f) => !!f.content);
+        withContent.forEach((file) => {
+          plan.uploads.push({
+            display: file.name,
             name: this.attachmentName(field.internalName, file.name),
             content: base64ToArrayBuffer(file.content)
           });
         });
-        return;
-      }
-      if (field.type === FieldType.Signature) {
-        const dataUrl = String(values[field.id] || '');
+        // names-only entries mean "keep what's stored"
+        plan.replace = withContent.length > 0 || files.length === 0;
+      } else {
+        const dataUrl = visible ? String(values[field.id] || '') : '';
         const comma = dataUrl.indexOf(',');
-        if (dataUrl.indexOf('data:image') !== 0 || comma < 0) {
-          return;
+        if (dataUrl.indexOf('data:image') === 0 && comma >= 0) {
+          plan.uploads.push({
+            display: svc('Service_Signature_AttachmentLabel'),
+            name: this.attachmentName(field.internalName, 'signature.png'),
+            content: base64ToArrayBuffer(dataUrl.slice(comma + 1))
+          });
+          plan.replace = true;
+        } else {
+          plan.replace = dataUrl.length === 0;
         }
-        uploads.push({
-          name: this.attachmentName(field.internalName, 'signature.png'),
-          content: base64ToArrayBuffer(dataUrl.slice(comma + 1))
-        });
       }
+      plans.push(plan);
     });
 
-    if (uploads.length === 0) {
-      return;
+    const anyWork = plans.some((p) => p.uploads.length > 0 || (itemExisted && p.replace));
+    if (!anyWork) {
+      return [];
     }
 
     const item = this.list(listId).items.getById(itemId);
-    for (const upload of uploads) {
-      try {
-        await item.attachmentFiles.add(upload.name, upload.content);
-      } catch (error) {
-        // a rejected attachment (size, blocked extension, duplicate on a resumed
-        // draft) must not fail an otherwise-valid response
-        logWarning('attaching "' + upload.name + '" (non-fatal)', error);
+    const taken: { [lower: string]: boolean } = {};
+    if (itemExisted) {
+      const existing = await this.listAttachments(listId, itemId);
+      for (const att of existing) {
+        const lower = att.FileName.toLowerCase();
+        const owner = plans.filter((p) => lower.indexOf(p.prefix.toLowerCase()) === 0)[0];
+        if (owner && owner.replace) {
+          try {
+            await item.attachmentFiles.getByName(att.FileName).delete();
+            continue;
+          } catch (error) {
+            logWarning('removing old attachment "' + att.FileName + '" (non-fatal)', error);
+          }
+        }
+        taken[lower] = true;
       }
     }
+
+    const failed: string[] = [];
+    for (const plan of plans) {
+      for (const upload of plan.uploads) {
+        const name = uniqueAttachmentName(upload.name, taken);
+        try {
+          await item.attachmentFiles.add(name, upload.content);
+        } catch (error) {
+          // a rejected attachment (size, blocked extension) must not fail an
+          // otherwise-valid response, but the caller has to be told
+          logWarning('attaching "' + name + '" (non-fatal)', error);
+          failed.push(upload.display);
+        }
+      }
+    }
+    return failed;
   }
 
   private attachmentName(internalName: string, fileName: string): string {
     const safe = fileName.replace(/[\\/:*?"<>|#%]/g, '_');
     return internalName + '__' + safe;
+  }
+
+  // -------------------------------------------------------------------------
+  // edit my response
+  // -------------------------------------------------------------------------
+
+  /**
+   * The current user's latest completed responses, newest first (default cap 1).
+   * Values are raw, keyed by column internal name, like getResponses.
+   */
+  public async getMyResponses(
+    listId: string,
+    definition: IFormDefinition,
+    limit?: number,
+    includeApproval?: boolean
+  ): Promise<IResponseItemEx[]> {
+    const fields = inputFields(definition).filter((f) => f.provisioned !== false);
+    const me = await this.sp.web.currentUser.select('Id')();
+    const plan = this.planSelects(fields, includeApproval === true);
+    const raw = await this.readItems(
+      listId,
+      plan,
+      SF_STATUS_INTERNAL_NAME + " eq 'Complete' and AuthorId eq " + me.Id,
+      Math.max(1, limit || 1)
+    );
+    return raw.map((r) => this.toResponseItem(r, fields));
+  }
+
+  /**
+   * Edit a submitted response. The caller passes the form's `allowEdit` flag; it
+   * is enforced here too. Only the author (or a list owner) may edit. Attachments
+   * are replaced/cleared per question exactly as for a resumed draft, and the
+   * status and duration are left alone.
+   */
+  public async updateResponse(
+    listId: string,
+    definition: IFormDefinition,
+    itemId: number,
+    values: IFormValues,
+    allowEdit: boolean,
+    options?: { locale?: string }
+  ): Promise<ISubmitResult> {
+    if (allowEdit !== true) {
+      throw new Error(svc('Service_Edit_NotAllowed'));
+    }
+    const item = this.list(listId).items.getById(itemId);
+    const [me, current] = await Promise.all([
+      this.sp.web.currentUser.select('Id')(),
+      item.select('AuthorId')()
+    ]);
+    if (current.AuthorId !== me.Id && !(await this.currentUserIsOwner(listId))) {
+      throw new Error(svc('Service_Edit_NotYours'));
+    }
+    const payload = await this.buildPayload(definition, values, options && options.locale, true);
+    await item.update(payload);
+    const failed = await this.uploadAttachments(listId, itemId, definition, values, true);
+    return { id: itemId, failedAttachments: failed };
+  }
+
+  // -------------------------------------------------------------------------
+  // approval workflow
+  // -------------------------------------------------------------------------
+
+  /** Create the approval columns if they're missing. Idempotent; cached per list. */
+  public async ensureApprovalColumns(listId: string): Promise<void> {
+    if (!this.approvalEnsured[listId]) {
+      this.approvalEnsured[listId] = (async () => {
+        const list = this.list(listId);
+        const existing: { InternalName: string }[] = await list.fields.select('InternalName')();
+        const names: { [lower: string]: string } = {};
+        existing.forEach((f) => {
+          names[f.InternalName.toLowerCase()] = f.InternalName;
+        });
+        await this.createSystemColumns(list, APPROVAL_COLUMNS, names, []);
+      })().catch((error) => {
+        delete this.approvalEnsured[listId];
+        throw error;
+      });
+    }
+    return this.approvalEnsured[listId];
+  }
+
+  /**
+   * Record a reviewer's decision on a response. Provisions the approval columns
+   * on first use. When `notifyRespondent` is set, the respondent is emailed the
+   * outcome (best-effort; a mail failure never fails the decision).
+   */
+  public async setResponseApproval(
+    listId: string,
+    definition: IFormDefinition,
+    itemId: number,
+    status: ApprovalStatus,
+    comment?: string,
+    options?: { notifyRespondent?: boolean; locale?: string }
+  ): Promise<void> {
+    await this.ensureApprovalColumns(listId);
+    const me = await this.sp.web.currentUser.select('Title')();
+    const item = this.list(listId).items.getById(itemId);
+    await item.update({
+      [SF_APPROVAL_STATUS_INTERNAL_NAME]: status,
+      [SF_APPROVAL_COMMENT_INTERNAL_NAME]: comment || '',
+      [SF_REVIEWED_BY_INTERNAL_NAME]: status === 'Pending' ? '' : me.Title
+    });
+
+    if (options && options.notifyRespondent === true && status !== 'Pending') {
+      try {
+        const author = await item.select('Author/EMail')
+          .expand('Author')() as { Author?: { EMail?: string } };
+        const email = author.Author && author.Author.EMail;
+        if (!email) {
+          return;
+        }
+        const title = definition.settings.formTitle || strings.Service_DefaultFormTitle;
+        const statusText = svc('Service_Approval_' + status);
+        const heading = svc('Service_Email_ApprovalHeading', { status: statusText });
+        const intro = svc('Service_Email_ApprovalIntro', { title, status: statusText });
+        const body =
+          '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#323130">' +
+          '<h2 style="margin:0 0 8px">' + escapeHtml(heading) + '</h2>' +
+          '<p>' + escapeHtml(intro) + '</p>' +
+          (comment
+            ? '<p><strong>' + escapeHtml(svc('Service_Email_ApprovalCommentLabel')) + ':</strong><br/>' +
+              escapeHtml(comment).replace(/\n/g, '<br/>') + '</p>'
+            : '') +
+          '</div>';
+        await this.sp.utility.sendEmail({
+          To: [email],
+          Subject: svc('Service_Email_ApprovalSubject', { title, status: statusText }),
+          Body: body,
+          AdditionalHeaders: { 'content-type': 'text/html' }
+        });
+      } catch (error) {
+        logWarning('emailing the approval decision (non-fatal)', error);
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -848,10 +1503,11 @@ export class SharePointService {
     listId: string,
     definition: IFormDefinition,
     values: IFormValues,
-    itemId: number
+    itemId: number,
+    locale?: string
   ): Promise<void> {
     const settings = definition.settings;
-    const formTitle = settings.formTitle || 'Smart Forms';
+    const formTitle = settings.formTitle || strings.Service_DefaultFormTitle;
     const recipients = (settings.notifyEmails || '')
       .split(/[;,]/)
       .map((e) => e.trim())
@@ -871,10 +1527,10 @@ export class SharePointService {
             itemId;
           await this.sp.utility.sendEmail({
             To: recipients,
-            Subject: 'New response — ' + formTitle,
+            Subject: formatString(strings.Service_Email_NewResponseSubject, { title: formTitle }),
             Body: buildResponseEmailHtml(definition, values, {
-              heading: 'New response: ' + formTitle,
-              intro: 'Someone just submitted a response — ' + new Date().toLocaleString() + '.',
+              heading: formatString(strings.Service_Email_NewResponseHeading, { title: formTitle }),
+              intro: formatString(strings.Service_Email_NewResponseIntro, { date: new Date().toLocaleString(locale) }),
               accentColor: settings.accentColor,
               itemUrl
             }),
@@ -893,10 +1549,10 @@ export class SharePointService {
           }
           await this.sp.utility.sendEmail({
             To: [me.Email],
-            Subject: 'Your response — ' + formTitle,
+            Subject: formatString(strings.Service_Email_ReceiptSubject, { title: formTitle }),
             Body: buildResponseEmailHtml(definition, values, {
-              heading: 'Thanks for your response!',
-              intro: 'Here is a copy of what you submitted to "' + formTitle + '".',
+              heading: strings.Service_Email_ReceiptHeading,
+              intro: formatString(strings.Service_Email_ReceiptIntro, { title: formTitle }),
               accentColor: settings.accentColor
             }),
             AdditionalHeaders: { 'content-type': 'text/html' }
@@ -1026,7 +1682,7 @@ export class SharePointService {
     }
   }
 
-  private buildItemTitle(definition: IFormDefinition, values: IFormValues): string {
+  private buildItemTitle(definition: IFormDefinition, values: IFormValues, locale?: string): string {
     const fields = inputFields(definition);
     for (const field of fields) {
       if (field.type === FieldType.Text || field.type === FieldType.Email) {
@@ -1036,15 +1692,21 @@ export class SharePointService {
         }
       }
     }
-    return 'Response — ' + new Date().toLocaleString();
+    return svc('Service_Item_DefaultTitle', { date: new Date().toLocaleString(locale) });
   }
 
   // -------------------------------------------------------------------------
   // reading responses
   // -------------------------------------------------------------------------
 
-  private selectsFor(fields: IFormField[]): { selects: string[]; expands: string[] } {
-    const selects: string[] = [
+  /**
+   * Split the columns to read across requests. SharePoint rejects a query with
+   * more than 12 lookup joins (each Person column is one, plus Author), and long
+   * $select lists risk the URL length limit. The first group carries the item
+   * basics; extra groups carry only Id plus their columns and are merged by Id.
+   */
+  private planSelects(fields: IFormField[], includeApproval: boolean): ISelectPlan {
+    const base: string[] = [
       'Id',
       'Created',
       'Modified',
@@ -1054,21 +1716,114 @@ export class SharePointService {
       SF_STATUS_INTERNAL_NAME,
       SF_DURATION_INTERNAL_NAME
     ];
-    const expands: string[] = ['Author', 'AttachmentFiles'];
+    if (includeApproval) {
+      base.push(
+        SF_APPROVAL_STATUS_INTERNAL_NAME,
+        SF_APPROVAL_COMMENT_INTERNAL_NAME,
+        SF_REVIEWED_BY_INTERNAL_NAME
+      );
+    }
+    const groups: ISelectGroup[] = [
+      { selects: base, expands: ['Author', 'AttachmentFiles'], joins: 1, length: base.join(',').length }
+    ];
 
     fields.forEach((field) => {
-      if (field.type === FieldType.Person) {
-        selects.push(field.internalName + '/Title');
-        selects.push(field.internalName + '/EMail');
-        expands.push(field.internalName);
-      } else {
-        selects.push(field.internalName);
+      const isPerson = field.type === FieldType.Person;
+      const add = isPerson
+        ? [field.internalName + '/Title', field.internalName + '/EMail']
+        : [field.internalName];
+      const cost = add.join(',').length + 1;
+      let group = groups[groups.length - 1];
+      if ((isPerson && group.joins + 1 > MAX_JOINS_PER_REQUEST) || group.length + cost > SELECT_CHAR_BUDGET) {
+        group = { selects: ['Id'], expands: [], joins: 0, length: 3 };
+        groups.push(group);
+      }
+      group.selects.push(...add);
+      group.length += cost;
+      if (isPerson) {
+        group.expands.push(field.internalName);
+        group.joins++;
       }
     });
-    return { selects, expands };
+
+    return { primary: groups[0], extra: groups.slice(1) };
   }
 
-  private toResponseItem(item: Record<string, unknown>, fields: IFormField[]): IResponseItem {
+  /** Fetch the secondary column groups for an Id window and merge them into the primary rows. */
+  private async mergeExtraGroups(
+    listId: string,
+    plan: ISelectPlan,
+    rows: Record<string, unknown>[]
+  ): Promise<void> {
+    if (plan.extra.length === 0 || rows.length === 0) {
+      return;
+    }
+    let minId = Number.MAX_VALUE;
+    let maxId = 0;
+    const byId: { [id: number]: Record<string, unknown> } = {};
+    rows.forEach((r) => {
+      const id = r.Id as number;
+      byId[id] = r;
+      minId = Math.min(minId, id);
+      maxId = Math.max(maxId, id);
+    });
+    await mapWithConcurrency(plan.extra, 2, async (group): Promise<undefined> => {
+      let query = this.list(listId).items.select(...group.selects);
+      if (group.expands.length > 0) {
+        query = query.expand(...group.expands);
+      }
+      let page = await query
+        .filter('Id ge ' + minId + ' and Id le ' + maxId)
+        .orderBy('Id', false)
+        .top(PAGE_SIZE)
+        .getPaged();
+      for (;;) {
+        (page.results || []).forEach((extra: Record<string, unknown>) => {
+          const target = byId[extra.Id as number];
+          if (target) {
+            Object.keys(extra).forEach((k) => {
+              if (k !== 'Id' && k !== '__metadata') {
+                target[k] = extra[k];
+              }
+            });
+          }
+        });
+        if (!page.hasNext) {
+          break;
+        }
+        page = await page.getNext();
+      }
+      return undefined;
+    });
+  }
+
+  /** Newest-first items matching a filter (small result sets), with all column groups merged. */
+  private async readItems(
+    listId: string,
+    plan: ISelectPlan,
+    filter: string,
+    limit: number
+  ): Promise<Record<string, unknown>[]> {
+    let rows: Record<string, unknown>[];
+    try {
+      const query = this.list(listId)
+        .items.select(...plan.primary.selects)
+        .expand(...plan.primary.expands)
+        .filter(filter)
+        .orderBy('Id', false)
+        .top(limit);
+      rows = await query();
+    } catch (error) {
+      if (!this.isThresholdError(error)) {
+        throw error;
+      }
+      rows = await this.walkIdRanges(listId, filter, limit, plan.primary.selects, plan.primary.expands);
+    }
+    await this.mergeExtraGroups(listId, plan, rows);
+    return rows;
+  }
+
+  private toResponseItem(item: Record<string, unknown>, fields: IFormField[]): IResponseItemEx {
     const values: Record<string, unknown> = {};
     fields.forEach((field) => {
       values[field.internalName] = item[field.internalName];
@@ -1077,6 +1832,8 @@ export class SharePointService {
     const status = item[SF_STATUS_INTERNAL_NAME] as ResponseStatus | undefined;
     const duration = item[SF_DURATION_INTERNAL_NAME];
     const attachments = (item.AttachmentFiles || []) as { FileName?: string }[];
+    const approval = item[SF_APPROVAL_STATUS_INTERNAL_NAME];
+    const hasApprovalColumn = SF_APPROVAL_STATUS_INTERNAL_NAME in item;
     return {
       id: item.Id as number,
       created: new Date(String(item.Created)),
@@ -1086,41 +1843,122 @@ export class SharePointService {
       status: status === 'Draft' ? 'Draft' : 'Complete',
       durationSeconds: typeof duration === 'number' ? duration : undefined,
       attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
-      values
+      values,
+      approvalStatus: hasApprovalColumn
+        ? approval === 'Approved' || approval === 'Rejected'
+          ? (approval as ApprovalStatus)
+          : 'Pending'
+        : undefined,
+      approvalComment: hasApprovalColumn ? String(item[SF_APPROVAL_COMMENT_INTERNAL_NAME] || '') : undefined,
+      reviewedBy: hasApprovalColumn ? String(item[SF_REVIEWED_BY_INTERNAL_NAME] || '') : undefined
     };
+  }
+
+  /**
+   * Owner-only, best-effort: items created before the status column existed (or
+   * directly in the list) have no status. Mark them Complete so the indexed
+   * `eq 'Complete'` filter, which stays legal past 5,000 items, still finds
+   * them. Batched; runs once per list per page load.
+   */
+  private backfillStatus(listId: string): Promise<void> {
+    if (!this.backfilled[listId]) {
+      this.backfilled[listId] = (async (): Promise<void> => {
+        try {
+          if (!(await this.currentUserIsOwner(listId))) {
+            return;
+          }
+          const list = this.list(listId);
+          for (let round = 0; round < 10; round++) {
+            const rows = await list.items
+              .select('Id')
+              .filter(SF_STATUS_INTERNAL_NAME + ' eq null')
+              .orderBy('Id', true)
+              .top(500)();
+            if (rows.length === 0) {
+              return;
+            }
+            for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+              const chunk = rows.slice(i, i + BATCH_SIZE);
+              const [batchedSp, execute] = this.sp.batched();
+              const batchedList = batchedSp.web.lists.getById(listId);
+              const pending = chunk.map((r: { Id: number }) =>
+                // bNewDocumentUpdate keeps Modified / Editor as they were
+                batchedList.items
+                  .getById(r.Id)
+                  .validateUpdateListItem([{ FieldName: SF_STATUS_INTERNAL_NAME, FieldValue: 'Complete' }], true)
+              );
+              await execute();
+              await Promise.all(pending);
+            }
+            if (rows.length < 500) {
+              return;
+            }
+          }
+        } catch (error) {
+          logWarning('backfilling response status (non-fatal)', error);
+        }
+      })();
+    }
+    return this.backfilled[listId];
   }
 
   /**
    * Load submitted items shaped for the responses views.
    *
-   * Pages through the list rather than taking a single `top(2000)` slice, and
-   * filters with `ne 'Draft'` rather than `eq 'Complete'` so items created
-   * directly in the list — which have no status value at all — still appear
-   * instead of silently vanishing from the owner's results.
+   * Pages through the list rather than taking a single `top(2000)` slice and
+   * filters on `eq 'Complete'`, which uses the status column's index and so
+   * stays legal past the 5,000-item list view threshold (`ne` cannot use the
+   * index). Items with no status at all (created directly in the list) are
+   * backfilled to Complete first when the caller owns the list.
+   *
+   * Person columns and long column lists are read in extra requests and merged,
+   * to stay under SharePoint's 12-join and URL-length limits.
+   * `includeApproval` also returns approvalStatus/comment/reviewedBy.
    */
   public async getResponses(
     listId: string,
     definition: IFormDefinition,
-    options?: { maxItems?: number; includeDrafts?: boolean }
-  ): Promise<IResponsePage> {
+    options?: { maxItems?: number; includeDrafts?: boolean; includeApproval?: boolean }
+  ): Promise<IResponsePageEx> {
+    if (options && options.includeApproval === true) {
+      try {
+        return await this.getResponsesCore(listId, definition, options, true);
+      } catch (error) {
+        // approval columns not provisioned (yet): read without them
+        logWarning('reading responses with approval columns (retrying without)', error);
+      }
+    }
+    return this.getResponsesCore(listId, definition, options, false);
+  }
+
+  private async getResponsesCore(
+    listId: string,
+    definition: IFormDefinition,
+    options: { maxItems?: number; includeDrafts?: boolean } | undefined,
+    includeApproval: boolean
+  ): Promise<IResponsePageEx> {
     const fields = inputFields(definition).filter((f) => f.provisioned !== false);
-    const { selects, expands } = this.selectsFor(fields);
+    const plan = this.planSelects(fields, includeApproval);
     const ceiling = Math.min(options && options.maxItems ? options.maxItems : MAX_RESPONSES, MAX_RESPONSES);
     const includeDrafts = options && options.includeDrafts === true;
 
+    await this.backfillStatus(listId);
+
     let query = this.list(listId)
-      .items.select(...selects)
-      .expand(...expands)
+      .items.select(...plan.primary.selects)
+      .expand(...plan.primary.expands)
       .orderBy('Id', false)
       .top(PAGE_SIZE);
     if (!includeDrafts) {
-      query = query.filter(SF_STATUS_INTERNAL_NAME + " ne 'Draft'");
+      query = query.filter(SF_STATUS_INTERNAL_NAME + " eq 'Complete'");
     }
 
-    const items: IResponseItem[] = [];
+    const items: IResponseItemEx[] = [];
     let page = await query.getPaged();
     for (;;) {
-      (page.results || []).forEach((raw: Record<string, unknown>) => {
+      const raws: Record<string, unknown>[] = page.results || [];
+      await this.mergeExtraGroups(listId, plan, raws);
+      raws.forEach((raw) => {
         if (items.length < ceiling) {
           items.push(this.toResponseItem(raw, fields));
         }
@@ -1142,7 +1980,7 @@ export class SharePointService {
     await this.list(listId).items.getById(itemId).delete();
   }
 
-  /** Delete several responses in one batched request. */
+  /** Delete several responses in batched requests of at most 100. */
   public async deleteResponses(listId: string, itemIds: number[]): Promise<void> {
     if (itemIds.length === 0) {
       return;
@@ -1151,13 +1989,13 @@ export class SharePointService {
       await this.deleteResponse(listId, itemIds[0]);
       return;
     }
-    const [batchedSp, execute] = this.sp.batched();
-    const list = batchedSp.web.lists.getById(listId);
-    itemIds.forEach((id) => {
-      // deliberately not awaited: batched calls are queued, then executed once
-      void list.items.getById(id).delete();
-    });
-    await execute();
+    for (let i = 0; i < itemIds.length; i += BATCH_SIZE) {
+      const [batchedSp, execute] = this.sp.batched();
+      const list = batchedSp.web.lists.getById(listId);
+      const pending = itemIds.slice(i, i + BATCH_SIZE).map((id) => list.items.getById(id).delete());
+      await execute();
+      await Promise.all(pending);
+    }
   }
 
   /** Absolute URLs of an item's attachments, grouped by question. */
@@ -1246,3 +2084,40 @@ const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
   }
   return bytes.buffer;
 };
+
+interface ISelectGroup {
+  selects: string[];
+  expands: string[];
+  joins: number;
+  length: number;
+}
+
+interface ISelectPlan {
+  primary: ISelectGroup;
+  extra: ISelectGroup[];
+}
+
+/** Make an attachment name unique (case-insensitively) against the names already taken. */
+const uniqueAttachmentName = (name: string, taken: { [lower: string]: boolean }): string => {
+  let candidate = name;
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  for (let n = 2; taken[candidate.toLowerCase()]; n++) {
+    candidate = stem + ' (' + n + ')' + ext;
+  }
+  taken[candidate.toLowerCase()] = true;
+  return candidate;
+};
+
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, Array.prototype.slice.call(bytes.subarray(i, i + 0x8000)));
+  }
+  return btoa(binary);
+};
+
+const escapeHtml = (value: string): string =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

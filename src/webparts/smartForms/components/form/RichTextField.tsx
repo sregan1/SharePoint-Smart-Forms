@@ -2,6 +2,7 @@ import * as React from 'react';
 import { IconButton } from '@fluentui/react';
 import styles from './FormRenderer.module.scss';
 import { sanitizeHtml, sanitizePastedData } from '../../utils/sanitizeHtml';
+import * as strings from 'SmartFormsWebPartStrings';
 
 export interface IRichTextFieldProps {
   value: string;
@@ -21,12 +22,12 @@ interface ICommand {
 }
 
 const COMMANDS: ICommand[] = [
-  { icon: 'Bold', title: 'Bold', command: 'bold' },
-  { icon: 'Italic', title: 'Italic', command: 'italic' },
-  { icon: 'Underline', title: 'Underline', command: 'underline' },
-  { icon: 'BulletedList', title: 'Bulleted list', command: 'insertUnorderedList' },
-  { icon: 'NumberedList', title: 'Numbered list', command: 'insertOrderedList' },
-  { icon: 'RemoveFormat', title: 'Clear formatting', command: 'removeFormat' }
+  { icon: 'Bold', title: strings.Form_RichText_Bold, command: 'bold' },
+  { icon: 'Italic', title: strings.Form_RichText_Italic, command: 'italic' },
+  { icon: 'Underline', title: strings.Form_RichText_Underline, command: 'underline' },
+  { icon: 'BulletedList', title: strings.Form_RichText_BulletedList, command: 'insertUnorderedList' },
+  { icon: 'NumberedList', title: strings.Form_RichText_NumberedList, command: 'insertOrderedList' },
+  { icon: 'RemoveFormat', title: strings.Form_RichText_ClearFormatting, command: 'removeFormat' }
 ];
 
 /**
@@ -100,7 +101,7 @@ export const RichTextField: React.FunctionComponent<IRichTextFieldProps> = (prop
   return (
     <div className={styles.richText}>
       {!props.disabled && (
-        <div className={styles.richTextToolbar} role="toolbar" aria-label="Text formatting">
+        <div className={styles.richTextToolbar} role="toolbar" aria-label={strings.Form_RichText_ToolbarAria}>
           {COMMANDS.map((c) => (
             <IconButton
               key={c.command}

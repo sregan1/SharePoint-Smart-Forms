@@ -15,6 +15,7 @@ import {
   TextField,
   Toggle
 } from '@fluentui/react';
+import * as strings from 'SmartFormsWebPartStrings';
 import styles from './FormDesigner.module.scss';
 import { FormLayout, IFormSettings } from '../../models';
 
@@ -25,14 +26,14 @@ export interface IFormSettingsPanelProps {
 }
 
 const ACCENT_COLORS: { name: string; color: string }[] = [
-  { name: 'Blue', color: '#0078d4' },
-  { name: 'Teal', color: '#03787c' },
-  { name: 'Green', color: '#498205' },
-  { name: 'Purple', color: '#8764b8' },
-  { name: 'Magenta', color: '#881798' },
-  { name: 'Red', color: '#d13438' },
-  { name: 'Orange', color: '#ca5010' },
-  { name: 'Gray', color: '#69797e' }
+  { name: strings.Designer_Color_Blue, color: '#0078d4' },
+  { name: strings.Designer_Color_Teal, color: '#03787c' },
+  { name: strings.Designer_Color_Green, color: '#498205' },
+  { name: strings.Designer_Color_Purple, color: '#8764b8' },
+  { name: strings.Designer_Color_Magenta, color: '#881798' },
+  { name: strings.Designer_Color_Red, color: '#d13438' },
+  { name: strings.Designer_Color_Orange, color: '#ca5010' },
+  { name: strings.Designer_Color_Gray, color: '#69797e' }
 ];
 
 /** A short, curated icon set — the full Fluent catalogue is unusable as a picker. */
@@ -93,8 +94,8 @@ export const FormSettingsPanel: React.FunctionComponent<IFormSettingsPanelProps>
   const set = (patch: Partial<IFormSettings>): void => setSettings((prev) => ({ ...prev, ...patch }));
 
   const layoutOptions: IDropdownOption[] = [
-    { key: 'singlePage', text: 'All questions on one page' },
-    { key: 'wizard', text: 'One section per step (wizard)' }
+    { key: 'singlePage', text: strings.Designer_Settings_LayoutSinglePage },
+    { key: 'wizard', text: strings.Designer_Settings_LayoutWizard }
   ];
 
   const openDate = fromIsoDate(settings.openDate);
@@ -105,51 +106,51 @@ export const FormSettingsPanel: React.FunctionComponent<IFormSettingsPanelProps>
     <Panel
       isOpen={true}
       type={PanelType.medium}
-      headerText="Form settings"
+      headerText={strings.Designer_Settings_Title}
       onDismiss={props.onDismiss}
       isFooterAtBottom={true}
       onRenderFooterContent={() => (
         <div className={styles.panelFooter}>
-          <PrimaryButton text="Apply" disabled={datesInverted} onClick={() => props.onSave(settings)} />
-          <DefaultButton text="Cancel" onClick={props.onDismiss} />
+          <PrimaryButton text={strings.Designer_Common_Apply} disabled={datesInverted} onClick={() => props.onSave(settings)} />
+          <DefaultButton text={strings.Designer_Common_Cancel} onClick={props.onDismiss} />
         </div>
       )}
     >
       <Pivot>
         {/* ----------------------------------------------------------------- */}
-        <PivotItem headerText="Basics" itemIcon="Info">
+        <PivotItem headerText={strings.Designer_Settings_TabBasics} itemIcon="Info">
           <div className={styles.panelBody}>
             <TextField
-              label="Form title"
+              label={strings.Designer_Settings_FormTitle}
               value={settings.formTitle}
               onChange={(_e, v) => set({ formTitle: v || '' })}
             />
             <TextField
-              label="Description"
+              label={strings.Designer_Settings_Description}
               multiline={true}
               rows={3}
               value={settings.formDescription || ''}
               onChange={(_e, v) => set({ formDescription: v })}
             />
             <Dropdown
-              label="Layout"
+              label={strings.Designer_Settings_Layout}
               options={layoutOptions}
               selectedKey={settings.layout}
               onChange={(_e, option) => option && set({ layout: String(option.key) as FormLayout })}
             />
             <Toggle
-              label="Number the questions"
+              label={strings.Designer_Settings_NumberQuestions}
               checked={settings.showQuestionNumbers !== false}
               onChange={(_e, checked) => set({ showQuestionNumbers: checked !== false })}
             />
             <Toggle
-              label="Shuffle question order for each respondent"
+              label={strings.Designer_Settings_ShuffleQuestions}
               checked={settings.shuffleQuestions === true}
               onChange={(_e, checked) => set({ shuffleQuestions: checked === true })}
             />
             {settings.layout === 'wizard' && (
               <Toggle
-                label="Show a progress bar"
+                label={strings.Designer_Settings_ShowProgressBar}
                 checked={settings.showProgressBar}
                 onChange={(_e, checked) => set({ showProgressBar: checked === true })}
               />
@@ -158,9 +159,9 @@ export const FormSettingsPanel: React.FunctionComponent<IFormSettingsPanelProps>
         </PivotItem>
 
         {/* ----------------------------------------------------------------- */}
-        <PivotItem headerText="Appearance" itemIcon="Color">
+        <PivotItem headerText={strings.Designer_Settings_TabAppearance} itemIcon="Color">
           <div className={styles.panelBody}>
-            <span className={styles.swatchLabel}>Accent color</span>
+            <span className={styles.swatchLabel}>{strings.Designer_Settings_AccentColor}</span>
             <div className={styles.swatchRow}>
               {ACCENT_COLORS.map((swatch) => (
                 <button
@@ -177,27 +178,26 @@ export const FormSettingsPanel: React.FunctionComponent<IFormSettingsPanelProps>
               <input
                 type="color"
                 className={styles.swatchCustom}
-                title="Custom color"
-                aria-label="Custom accent color"
+                title={strings.Designer_Settings_CustomColorTitle}
+                aria-label={strings.Designer_Settings_CustomColorAria}
                 value={settings.accentColor || '#0078d4'}
                 onChange={(e) => set({ accentColor: e.target.value })}
               />
             </div>
             <p className={styles.panelHint}>
-              Accent colors are automatically adjusted for contrast on dark sites, so the form stays
-              readable whichever theme the page uses.
+              {strings.Designer_Settings_AccentHint}
             </p>
 
             <Toggle
-              label="Show the form header"
+              label={strings.Designer_Settings_ShowHeader}
               checked={settings.showFormHeader}
               onChange={(_e, checked) => set({ showFormHeader: checked === true })}
             />
 
             {settings.showFormHeader && (
               <>
-                <span className={styles.swatchLabel}>Header icon</span>
-                <div className={styles.iconGrid} role="group" aria-label="Header icon">
+                <span className={styles.swatchLabel}>{strings.Designer_Settings_HeaderIcon}</span>
+                <div className={styles.iconGrid} role="group" aria-label={strings.Designer_Settings_HeaderIcon}>
                   {HEADER_ICONS.map((icon) => (
                     <button
                       key={icon}
@@ -218,29 +218,29 @@ export const FormSettingsPanel: React.FunctionComponent<IFormSettingsPanelProps>
         </PivotItem>
 
         {/* ----------------------------------------------------------------- */}
-        <PivotItem headerText="After submit" itemIcon="CheckMark">
+        <PivotItem headerText={strings.Designer_Settings_TabAfterSubmit} itemIcon="CheckMark">
           <div className={styles.panelBody}>
             <TextField
-              label="Submit button text"
+              label={strings.Designer_Settings_SubmitButtonText}
               value={settings.submitButtonText}
-              placeholder="Submit"
+              placeholder={strings.Designer_Settings_SubmitPlaceholder}
               onChange={(_e, v) => set({ submitButtonText: v || 'Submit' })}
             />
             <TextField
-              label="Thank-you title"
+              label={strings.Designer_Settings_ThankYouTitle}
               value={settings.confirmationTitle}
-              placeholder="Thank you!"
+              placeholder={strings.Designer_Settings_ThankYouPlaceholder}
               onChange={(_e, v) => set({ confirmationTitle: v || 'Thank you!' })}
             />
             <TextField
-              label="Thank-you message"
+              label={strings.Designer_Settings_ThankYouMessage}
               multiline={true}
               rows={3}
               value={settings.confirmationMessage}
               onChange={(_e, v) => set({ confirmationMessage: v || '' })}
             />
             <Toggle
-              label='Show a "Submit another response" button'
+              label={strings.Designer_Settings_ShowSubmitAnother}
               checked={settings.allowAnotherResponse}
               onChange={(_e, checked) => set({ allowAnotherResponse: checked === true })}
             />
@@ -248,84 +248,106 @@ export const FormSettingsPanel: React.FunctionComponent<IFormSettingsPanelProps>
         </PivotItem>
 
         {/* ----------------------------------------------------------------- */}
-        <PivotItem headerText="Notifications" itemIcon="Mail">
+        <PivotItem headerText={strings.Designer_Settings_TabNotifications} itemIcon="Mail">
           <div className={styles.panelBody}>
             <TextField
-              label="Email each response to"
-              placeholder="name@company.com; team@company.com"
-              description="People in your organization get every response by email, with a link to the list item"
+              label={strings.Designer_Settings_EmailEachResponseTo}
+              placeholder={strings.Designer_Settings_EmailPlaceholder}
+              description={strings.Designer_Settings_EmailDescription}
               value={settings.notifyEmails || ''}
               onChange={(_e, v) => set({ notifyEmails: v })}
             />
             <Toggle
-              label="Email respondents a copy of their answers"
+              label={strings.Designer_Settings_RespondentReceipt}
               checked={settings.respondentReceipt === true}
               onChange={(_e, checked) => set({ respondentReceipt: checked === true })}
             />
+            <Toggle
+              label={strings.Designer_Settings_EnableApproval}
+              checked={settings.enableApproval === true}
+              onChange={(_e, checked) =>
+                set(
+                  checked === true
+                    ? { enableApproval: true }
+                    : { enableApproval: false, approvalNotify: false }
+                )
+              }
+            />
+            <Toggle
+              label={strings.Designer_Settings_ApprovalNotify}
+              checked={settings.enableApproval === true && settings.approvalNotify === true}
+              disabled={settings.enableApproval !== true}
+              onChange={(_e, checked) => set({ approvalNotify: checked === true })}
+            />
+            <p className={styles.panelHint}>{strings.Designer_Settings_ApprovalHint}</p>
             <MessageBar messageBarType={MessageBarType.info}>
-              Notifications use SharePoint&apos;s own mail service, so recipients must be users in your
-              organization. External addresses are silently dropped.
+              {strings.Designer_Settings_NotificationsInfo}
             </MessageBar>
           </div>
         </PivotItem>
 
         {/* ----------------------------------------------------------------- */}
-        <PivotItem headerText="Access" itemIcon="Lock">
+        <PivotItem headerText={strings.Designer_Settings_TabAccess} itemIcon="Lock">
           <div className={styles.panelBody}>
             <DatePicker
-              label="Open from"
+              label={strings.Designer_Settings_OpenFrom}
               value={openDate}
-              placeholder="Open immediately"
+              placeholder={strings.Designer_Settings_OpenImmediately}
               allowTextInput={true}
               onSelectDate={(date) => set({ openDate: toIsoDate(date || undefined) })}
             />
             <DatePicker
-              label="Close after"
+              label={strings.Designer_Settings_CloseAfter}
               value={closeDate}
-              placeholder="Never close"
+              placeholder={strings.Designer_Settings_NeverClose}
               allowTextInput={true}
               onSelectDate={(date) => set({ closeDate: toIsoDate(date || undefined) })}
             />
             {(openDate || closeDate) && (
               <DefaultButton
                 iconProps={{ iconName: 'Clear' }}
-                text="Clear dates"
+                text={strings.Designer_Settings_ClearDates}
                 onClick={() => set({ openDate: undefined, closeDate: undefined })}
               />
             )}
             {datesInverted && (
               <MessageBar messageBarType={MessageBarType.error}>
-                The close date is on or before the open date, so the form would never accept responses.
+                {strings.Designer_Settings_DatesInverted}
               </MessageBar>
             )}
 
             <TextField
-              label="Stop after this many responses"
+              label={strings.Designer_Settings_MaxResponses}
               value={settings.maxResponses === undefined ? '' : String(settings.maxResponses)}
-              placeholder="No limit"
+              placeholder={strings.Designer_Settings_NoLimit}
               onChange={(_e, v) => set({ maxResponses: numberOrUndefined(v) })}
             />
             <Toggle
-              label="Only allow one response per person"
+              label={strings.Designer_Settings_OneResponsePerPerson}
               checked={settings.oneResponsePerPerson === true}
               onChange={(_e, checked) => set({ oneResponsePerPerson: checked === true })}
             />
             <Toggle
-              label="Let respondents save a draft and finish later"
+              label={strings.Designer_Settings_AllowSaveDraft}
               checked={settings.allowSaveDraft === true}
               onChange={(_e, checked) => set({ allowSaveDraft: checked === true })}
             />
+            <Toggle
+              label={strings.Designer_Settings_AllowEdit}
+              checked={settings.allowEdit === true}
+              onChange={(_e, checked) => set({ allowEdit: checked === true })}
+            />
+            <p className={styles.panelHint}>{strings.Designer_Settings_AllowEditHint}</p>
             <TextField
-              label="Message shown when the form is closed"
+              label={strings.Designer_Settings_ClosedMessage}
               multiline={true}
               rows={2}
               value={settings.closedMessage || ''}
-              placeholder="This form is no longer accepting responses."
+              placeholder={strings.Designer_Settings_ClosedMessagePlaceholder}
               onChange={(_e, v) => set({ closedMessage: v })}
             />
             <MessageBar messageBarType={MessageBarType.info}>
-              These limits are enforced by the form, not by SharePoint. Anyone with permission to add
-              items to the response list could still add one directly through the list.
+              {strings.Designer_Settings_AccessInfo}
             </MessageBar>
           </div>
         </PivotItem>

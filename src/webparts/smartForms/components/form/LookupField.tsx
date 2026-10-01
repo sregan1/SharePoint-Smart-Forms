@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Dropdown, IDropdownOption, Spinner, SpinnerSize } from '@fluentui/react';
 import styles from './FormRenderer.module.scss';
 import { SharePointService } from '../../services/SharePointService';
+import * as strings from 'SmartFormsWebPartStrings';
 
 export interface ILookupFieldProps {
   listId: string;
@@ -55,7 +56,7 @@ export const LookupField: React.FunctionComponent<ILookupFieldProps> = (props) =
         if (cancelled) {
           return;
         }
-        setError('The options for this question could not be loaded.');
+        setError(strings.Form_Lookup_LoadError);
         setLoading(false);
       });
     return () => {
@@ -64,7 +65,7 @@ export const LookupField: React.FunctionComponent<ILookupFieldProps> = (props) =
   }, [props.listId, props.column, props.filter]);
 
   if (loading) {
-    return <Spinner size={SpinnerSize.small} label="Loading options…" labelPosition="right" />;
+    return <Spinner size={SpinnerSize.small} label={strings.Form_Lookup_Loading} labelPosition="right" />;
   }
 
   if (error) {
@@ -85,7 +86,7 @@ export const LookupField: React.FunctionComponent<ILookupFieldProps> = (props) =
         multiSelect={true}
         options={dropdownOptions}
         selectedKeys={selected}
-        placeholder={props.placeholder || 'Select options'}
+        placeholder={props.placeholder || strings.Form_Lookup_SelectOptionsPlaceholder}
         disabled={props.disabled}
         ariaLabel={props.ariaLabel}
         aria-describedby={props.ariaDescribedBy}
@@ -107,7 +108,7 @@ export const LookupField: React.FunctionComponent<ILookupFieldProps> = (props) =
     <Dropdown
       options={dropdownOptions}
       selectedKey={selected[0] || null}
-      placeholder={props.placeholder || 'Select an option'}
+      placeholder={props.placeholder || strings.Form_Lookup_SelectOptionPlaceholder}
       disabled={props.disabled}
       ariaLabel={props.ariaLabel}
       aria-describedby={props.ariaDescribedBy}

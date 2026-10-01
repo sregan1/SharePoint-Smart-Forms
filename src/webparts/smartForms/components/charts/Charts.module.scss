@@ -73,7 +73,7 @@
 }
 
 .tooltipValue {
-  margin-left: auto;
+  margin-inline-start: auto;
   font-weight: 600;
   color: #{$fg};
   font-variant-numeric: tabular-nums;
@@ -119,7 +119,7 @@
   background: none;
   padding: 2px 0;
   width: 100%;
-  text-align: left;
+  text-align: start;
   font-family: inherit;
   cursor: default;
   border-radius: $radius-sm;
@@ -170,7 +170,7 @@
 .barValue {
   width: 78px;
   flex-shrink: 0;
-  text-align: right;
+  text-align: end;
   font-size: $text-xs;
   color: #{$fg-muted};
   white-space: nowrap;
@@ -397,7 +397,7 @@
 
   th,
   td {
-    text-align: left;
+    text-align: start;
     padding: 4px $space-2;
     border-bottom: 1px solid #{$border};
   }
@@ -412,7 +412,7 @@
 
   td:last-child,
   th:last-child {
-    text-align: right;
+    text-align: end;
     font-variant-numeric: tabular-nums;
   }
 }

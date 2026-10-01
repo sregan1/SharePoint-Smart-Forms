@@ -3,6 +3,8 @@ import { Icon, IconButton, MessageBar, MessageBarType } from '@fluentui/react';
 import styles from './FormRenderer.module.scss';
 import { IFormFile } from '../../models';
 import { fileExtension } from '../../utils/formUtils';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 
 export interface IFileUploadFieldProps {
   value: IFormFile[];
@@ -21,12 +23,12 @@ export const formatBytes = (bytes: number): string => {
     return '';
   }
   if (bytes < 1024) {
-    return bytes + ' B';
+    return formatString(strings.Form_File_SizeBytes, { size: bytes });
   }
   if (bytes < 1024 * 1024) {
-    return Math.round(bytes / 1024) + ' KB';
+    return formatString(strings.Form_File_SizeKb, { size: Math.round(bytes / 1024) });
   }
-  return (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0) + ' MB';
+  return formatString(strings.Form_File_SizeMb, { size: (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0) });
 };
 
 const ICON_FOR_EXTENSION: { [extension: string]: string } = {
@@ -71,6 +73,10 @@ const readAsBase64 = (file: File): Promise<string> =>
  */
 export const FileUploadField: React.FunctionComponent<IFileUploadFieldProps> = (props) => {
   const files = props.value || [];
+  // always the latest committed list, so a slow read can't clobber files added meanwhile
+  const filesRef = React.useRef<IFormFile[]>(files);
+  filesRef.current = files;
+  const readingRef = React.useRef<boolean>(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = React.useState<boolean>(false);
   const [rejected, setRejected] = React.useState<string>('');
@@ -83,7 +89,7 @@ export const FileUploadField: React.FunctionComponent<IFileUploadFieldProps> = (
   const accept = allowed.length > 0 ? allowed.map((e) => '.' + e).join(',') : undefined;
 
   const addFiles = async (incoming: FileList | undefined): Promise<void> => {
-    if (!incoming || incoming.length === 0) {
+    if (!incoming || incoming.length === 0 || readingRef.current || props.disabled) {
       return;
     }
     const problems: string[] = [];
@@ -92,19 +98,23 @@ export const FileUploadField: React.FunctionComponent<IFileUploadFieldProps> = (
     for (let i = 0; i < incoming.length; i++) {
       const file = incoming[i];
       if (accepted.length >= remaining) {
-        problems.push('"' + file.name + '" was skipped — the limit is ' + (props.maxFiles || 3) + '.');
+        problems.push(formatString(strings.Form_File_SkippedLimit, { name: file.name, limit: props.maxFiles || 3 }));
         continue;
       }
       if (allowed.length > 0 && allowed.indexOf(fileExtension(file.name)) === -1) {
-        problems.push('"' + file.name + '" is not an accepted type.');
+        problems.push(formatString(strings.Form_File_TypeNotAccepted, { name: file.name }));
         continue;
       }
       if (file.size > maxBytes) {
-        problems.push('"' + file.name + '" is larger than ' + (props.maxFileSizeMb || 10) + ' MB.');
+        problems.push(formatString(strings.Form_File_TooLarge, { name: file.name, size: props.maxFileSizeMb || 10 }));
         continue;
       }
-      if (files.filter((existing) => existing.name === file.name).length > 0) {
-        problems.push('"' + file.name + '" is already attached.');
+      const lower = file.name.toLowerCase();
+      if (
+        files.some((existing) => existing.name.toLowerCase() === lower) ||
+        accepted.some((a) => a.name.toLowerCase() === lower)
+      ) {
+        problems.push(formatString(strings.Form_File_AlreadyAttached, { name: file.name }));
         continue;
       }
       accepted.push(file);
@@ -115,6 +125,7 @@ export const FileUploadField: React.FunctionComponent<IFileUploadFieldProps> = (
       return;
     }
 
+    readingRef.current = true;
     setReading(true);
     try {
       const read: IFormFile[] = [];
@@ -122,15 +133,27 @@ export const FileUploadField: React.FunctionComponent<IFileUploadFieldProps> = (
         const content = await readAsBase64(file);
         read.push({ name: file.name, size: file.size, content });
       }
-      props.onChange(files.concat(read));
+      // merge into the latest list rather than the snapshot taken before the read
+      const latest = filesRef.current;
+      const known = latest.map((f) => f.name.toLowerCase());
+      const room = Math.max(0, (props.maxFiles || 3) - latest.length);
+      const fresh = read.filter((f) => known.indexOf(f.name.toLowerCase()) === -1).slice(0, room);
+      if (fresh.length > 0) {
+        const merged = latest.concat(fresh);
+        filesRef.current = merged;
+        props.onChange(merged);
+      }
     } catch {
-      setRejected('One of the files could not be read. Try attaching it again.');
+      setRejected(strings.Form_File_ReadError);
     }
+    readingRef.current = false;
     setReading(false);
   };
 
   const removeAt = (index: number): void => {
-    props.onChange(files.filter((_f, i) => i !== index));
+    const next = filesRef.current.filter((_f, i) => i !== index);
+    filesRef.current = next;
+    props.onChange(next);
     setRejected('');
   };
 
@@ -144,8 +167,10 @@ export const FileUploadField: React.FunctionComponent<IFileUploadFieldProps> = (
   if (allowed.length > 0) {
     hintParts.push(allowed.join(', '));
   }
-  hintParts.push('up to ' + (props.maxFileSizeMb || 10) + ' MB each');
-  hintParts.push((props.maxFiles || 3) === 1 ? '1 file' : 'max ' + (props.maxFiles || 3) + ' files');
+  hintParts.push(formatString(strings.Form_File_HintMaxSize, { size: props.maxFileSizeMb || 10 }));
+  hintParts.push((props.maxFiles || 3) === 1
+      ? strings.Form_File_HintOneFile
+      : formatString(strings.Form_File_HintMaxFiles, { count: props.maxFiles || 3 }));
 
   return (
     <div>
@@ -153,20 +178,26 @@ export const FileUploadField: React.FunctionComponent<IFileUploadFieldProps> = (
         <div
           className={dragActive ? styles.dropZoneActive : styles.dropZone}
           role="button"
-          tabIndex={0}
+          tabIndex={reading ? -1 : 0}
+          aria-busy={reading ? true : undefined}
+          aria-disabled={reading ? true : undefined}
           aria-label={props.ariaLabel}
           aria-describedby={props.ariaDescribedBy}
           aria-invalid={props.invalid ? true : undefined}
-          onClick={openPicker}
+          onClick={() => {
+            if (!reading) {
+              openPicker();
+            }
+          }}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
+            if (!reading && (event.key === 'Enter' || event.key === ' ')) {
               event.preventDefault();
               openPicker();
             }
           }}
           onDragOver={(event) => {
             event.preventDefault();
-            setDragActive(true);
+            setDragActive(!reading);
           }}
           onDragLeave={() => setDragActive(false)}
           onDrop={(event) => {
@@ -177,7 +208,7 @@ export const FileUploadField: React.FunctionComponent<IFileUploadFieldProps> = (
         >
           <Icon iconName={reading ? 'Sync' : 'CloudUpload'} className={styles.dropZoneIcon} />
           <span className={styles.dropZoneText}>
-            {reading ? 'Reading files…' : 'Drop files here, or click to browse'}
+            {reading ? strings.Form_File_Reading : strings.Form_File_DropPrompt}
           </span>
           <span className={styles.dropZoneHint}>{hintParts.join(' · ')}</span>
         </div>
@@ -222,8 +253,8 @@ export const FileUploadField: React.FunctionComponent<IFileUploadFieldProps> = (
               {!props.disabled && (
                 <IconButton
                   iconProps={{ iconName: 'Delete' }}
-                  title={'Remove ' + file.name}
-                  ariaLabel={'Remove ' + file.name}
+                  title={formatString(strings.Form_File_Remove, { name: file.name })}
+                  ariaLabel={formatString(strings.Form_File_Remove, { name: file.name })}
                   onClick={() => removeAt(index)}
                 />
               )}

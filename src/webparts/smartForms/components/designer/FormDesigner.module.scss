@@ -814,3 +814,63 @@
   background: #{$accent-tint};
   color: #{$accent};
 }
+
+// ----- drop target at the end of a section / inside an empty section -----
+.sectionDropZone {
+  border: 1px dashed #{$border-muted};
+  border-radius: $radius-xl;
+  padding: $space-3;
+  text-align: center;
+  font-size: $text-sm;
+  color: #{$fg-muted};
+  margin-bottom: $space-2;
+}
+
+.sectionDropZoneActive {
+  border: 1px dashed #{$accent};
+  border-radius: $radius-xl;
+  padding: $space-3;
+  text-align: center;
+  font-size: $text-sm;
+  color: #{$accent};
+  background: #{$accent-tint};
+  margin-bottom: $space-2;
+}
+
+// ----- version history -----
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+  padding-bottom: $space-4;
+}
+
+.historyRow {
+  display: flex;
+  flex-direction: column;
+  gap: $space-1;
+  padding: $space-2 $space-3;
+  border: 1px solid #{$border};
+  border-radius: $radius-xl;
+  background: #{$surface};
+}
+
+.historyRowHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $space-2;
+  font-weight: 600;
+  color: #{$fg};
+}
+
+.historyMeta {
+  font-size: $text-sm;
+  color: #{$fg-muted};
+}
+
+.historyActions {
+  display: flex;
+  gap: $space-2;
+  align-items: center;
+}

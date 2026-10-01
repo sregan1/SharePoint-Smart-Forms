@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { ComboBox, IComboBoxOption } from '@fluentui/react';
+import * as strings from 'SmartFormsWebPartStrings';
 
 export interface ITimeFieldProps {
   /** a Date whose time-of-day carries the answer */
@@ -118,7 +119,7 @@ export const TimeField: React.FunctionComponent<ITimeFieldProps> = (props) => {
       options={allOptions}
       selectedKey={current === undefined ? null : String(current)}
       text={current === undefined ? '' : formatMinutes(current)}
-      placeholder={props.placeholder || 'Select a time'}
+      placeholder={props.placeholder || strings.Form_Time_Placeholder}
       disabled={props.disabled}
       ariaLabel={props.ariaLabel}
       errorMessage={props.invalid ? ' ' : undefined}

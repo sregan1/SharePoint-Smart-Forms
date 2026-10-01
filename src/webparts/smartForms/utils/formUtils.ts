@@ -14,8 +14,10 @@ import {
   IHyperlinkValue,
   ILikertValue,
   IPersonInfo,
+  IMessageBag,
   isInputType,
   migrateDefinition,
+  msg,
   RANGE_OPERATORS,
   UNARY_OPERATORS
 } from '../models';
@@ -73,8 +75,12 @@ export const buildNumberMap = (fields: IFormField[]): { [fieldId: string]: numbe
  * Generate a SharePoint internal column name from a display title.
  * Letters and digits only (no underscore escaping headaches), prefixed so
  * Smart Forms columns are easy to recognize, unique within the definition.
+ *
+ * `retired` lists names of columns whose questions were deleted after being
+ * published: the column still exists in the list, so reusing its name would
+ * make a new question silently adopt the old column (wrong type, old data).
  */
-export const generateInternalName = (title: string, existing: string[]): string => {
+export const generateInternalName = (title: string, existing: string[], retired?: string[]): string => {
   let base = 'SF';
   const words = (title || 'Field').split(/[^a-zA-Z0-9]+/).filter((w) => w.length > 0);
   words.forEach((w) => {
@@ -86,13 +92,41 @@ export const generateInternalName = (title: string, existing: string[]): string 
   }
   let candidate = base;
   let suffix = 2;
-  const lower = existing.map((e) => e.toLowerCase());
-  while (lower.indexOf(candidate.toLowerCase()) !== -1) {
+  const taken = (existing || []).concat(retired || []).map((e) => (e || '').toLowerCase());
+  while (taken.indexOf(candidate.toLowerCase()) !== -1) {
     candidate = base + suffix;
     suffix++;
   }
   return candidate;
 };
+
+/** Every internal name that must not be handed out again: live fields plus retired columns. */
+export const reservedInternalNames = (definition: IFormDefinition): string[] =>
+  allFields(definition)
+    .map((f) => f.internalName)
+    .filter((n) => !!n)
+    .concat(definition.retiredColumns || []);
+
+/**
+ * Record an internal column name as retired so generateInternalName never reuses
+ * it. Call when a question that was already published (provisioned) is deleted.
+ * Mutates and returns the definition; safe to call twice.
+ */
+export const retireField = (definition: IFormDefinition, name: string | undefined): IFormDefinition => {
+  const clean = (name || '').trim();
+  if (clean.length === 0) {
+    return definition;
+  }
+  const list = definition.retiredColumns || [];
+  if (list.filter((n) => n.toLowerCase() === clean.toLowerCase()).length === 0) {
+    definition.retiredColumns = list.concat([clean]);
+  }
+  return definition;
+};
+
+/** Retire a deleted field's column when it had been provisioned (no-op for never-published fields). */
+export const retireDeletedField = (definition: IFormDefinition, field: IFormField): IFormDefinition =>
+  field.provisioned && field.internalName ? retireField(definition, field.internalName) : definition;
 
 // ---------------------------------------------------------------------------
 // choices
@@ -213,29 +247,63 @@ export const isEmptyValue = (field: IFormField, value: unknown): boolean => {
 const selectionCount = (value: unknown): number =>
   Array.isArray(value) ? value.length : isEmptyValue({ type: FieldType.Text } as IFormField, value) ? 0 : 1;
 
-/** Returns an error message, or undefined when the value is valid. */
-export const validateField = (field: IFormField, value: unknown): string | undefined => {
+/** Result of a validation check: a message code plus tokens, or author-supplied text. */
+export interface IValidationResult {
+  /** Logic_ message key (empty when `message` carries author-supplied text) */
+  code: string;
+  params?: { [token: string]: string | number };
+  /** set when the text was written by the form owner (requiredMessage / patternMessage) */
+  message?: string;
+}
+
+/**
+ * Compile a field's custom validation pattern. The expression is anchored as
+ * ^(?:...)$ so "\d{3}" means the whole answer is three digits, not "contains
+ * three digits". Returns undefined for an invalid pattern — it must never throw.
+ */
+export const compilePattern = (pattern: string | undefined): RegExp | undefined => {
+  if (!pattern) {
+    return undefined;
+  }
+  try {
+    return new RegExp('^(?:' + pattern + ')$');
+  } catch {
+    return undefined;
+  }
+};
+
+const failure = (code: string, params?: { [token: string]: string | number }): IValidationResult => ({
+  code: code,
+  params: params
+});
+
+/**
+ * Validate one answer and return a message code plus tokens (or undefined when
+ * valid). Use this when the caller supplies its own strings; validateField wraps
+ * it with the English defaults.
+ */
+export const validateFieldResult = (field: IFormField, value: unknown): IValidationResult | undefined => {
   if (!isInputType(field.type)) {
     return undefined;
   }
-  const label = field.title || 'This question';
+  const label = field.title || '';
   const empty = isEmptyValue(field, value);
 
   if (field.required && empty) {
     if (field.requiredMessage) {
-      return field.requiredMessage;
+      return { code: '', message: field.requiredMessage };
     }
     switch (field.type) {
       case FieldType.Consent:
-        return 'Please tick the box to continue';
+        return failure('Logic_RequiredConsent');
       case FieldType.FileUpload:
-        return 'Please attach at least one file';
+        return failure('Logic_RequiredFile');
       case FieldType.Signature:
-        return 'Please add your signature';
+        return failure('Logic_RequiredSignature');
       case FieldType.Likert:
-        return 'Please answer every row';
+        return failure('Logic_RequiredLikert');
       default:
-        return label + ' is required';
+        return failure('Logic_Required', { label: label });
     }
   }
   if (empty) {
@@ -245,19 +313,19 @@ export const validateField = (field: IFormField, value: unknown): string | undef
   switch (field.type) {
     case FieldType.Email:
       if (!EMAIL_REGEX.test(String(value).trim())) {
-        return 'Enter a valid email address';
+        return failure('Logic_InvalidEmail');
       }
       break;
 
     case FieldType.Phone:
       if (!PHONE_REGEX.test(String(value).trim())) {
-        return 'Enter a valid phone number';
+        return failure('Logic_InvalidPhone');
       }
       break;
 
     case FieldType.Hyperlink:
       if (!URL_REGEX.test((value as IHyperlinkValue).url.trim())) {
-        return 'Enter a valid web address starting with http:// or https://';
+        return failure('Logic_InvalidUrl');
       }
       break;
 
@@ -270,10 +338,10 @@ export const validateField = (field: IFormField, value: unknown): string | undef
       const min = field.type === FieldType.Rating ? undefined : field.min;
       const max = field.type === FieldType.Rating ? field.maxRating : field.max;
       if (typeof min === 'number' && num < min) {
-        return 'Value must be at least ' + formatNumberForMessage(field, min);
+        return failure('Logic_MinValue', { value: formatNumberForMessage(field, min) });
       }
       if (typeof max === 'number' && num > max) {
-        return 'Value must be at most ' + formatNumberForMessage(field, max);
+        return failure('Logic_MaxValue', { value: formatNumberForMessage(field, max) });
       }
       break;
     }
@@ -281,7 +349,7 @@ export const validateField = (field: IFormField, value: unknown): string | undef
     case FieldType.Text:
     case FieldType.MultilineText:
       if (field.maxLength && String(value).length > field.maxLength) {
-        return 'Maximum length is ' + field.maxLength + ' characters';
+        return failure('Logic_MaxLength', { max: field.maxLength });
       }
       break;
 
@@ -290,10 +358,14 @@ export const validateField = (field: IFormField, value: unknown): string | undef
     case FieldType.Lookup: {
       const count = selectionCount(value);
       if (field.allowMultiple && typeof field.minSelections === 'number' && count < field.minSelections) {
-        return 'Choose at least ' + field.minSelections + (field.minSelections === 1 ? ' option' : ' options');
+        return failure(field.minSelections === 1 ? 'Logic_ChooseAtLeastOne' : 'Logic_ChooseAtLeastMany', {
+          count: field.minSelections
+        });
       }
       if (field.allowMultiple && typeof field.maxSelections === 'number' && count > field.maxSelections) {
-        return 'Choose no more than ' + field.maxSelections + (field.maxSelections === 1 ? ' option' : ' options');
+        return failure(field.maxSelections === 1 ? 'Logic_ChooseAtMostOne' : 'Logic_ChooseAtMostMany', {
+          count: field.maxSelections
+        });
       }
       break;
     }
@@ -303,7 +375,7 @@ export const validateField = (field: IFormField, value: unknown): string | undef
       const rows = field.likertRows || [];
       const unanswered = rows.filter((row) => !answers[row]);
       if (field.required && unanswered.length > 0) {
-        return 'Please answer every row (' + unanswered.length + ' remaining)';
+        return failure('Logic_LikertRemaining', { count: unanswered.length });
       }
       break;
     }
@@ -312,18 +384,18 @@ export const validateField = (field: IFormField, value: unknown): string | undef
       const files = (value || []) as IFormFile[];
       const maxFiles = field.maxFiles || 3;
       if (files.length > maxFiles) {
-        return 'Attach no more than ' + maxFiles + (maxFiles === 1 ? ' file' : ' files');
+        return failure(maxFiles === 1 ? 'Logic_MaxFilesOne' : 'Logic_MaxFilesMany', { count: maxFiles });
       }
       const maxBytes = (field.maxFileSizeMb || 10) * 1024 * 1024;
       const tooBig = files.filter((f) => f.size > maxBytes)[0];
       if (tooBig) {
-        return '"' + tooBig.name + '" is larger than ' + (field.maxFileSizeMb || 10) + ' MB';
+        return failure('Logic_FileTooLarge', { name: tooBig.name, size: field.maxFileSizeMb || 10 });
       }
       const allowed = (field.allowedExtensions || []).map((e) => e.toLowerCase().replace(/^\./, ''));
       if (allowed.length > 0) {
         const wrong = files.filter((f) => allowed.indexOf(fileExtension(f.name)) === -1)[0];
         if (wrong) {
-          return '"' + wrong.name + '" is not an accepted file type (' + allowed.join(', ') + ')';
+          return failure('Logic_FileTypeNotAccepted', { name: wrong.name, types: allowed.join(', ') });
         }
       }
       break;
@@ -333,28 +405,45 @@ export const validateField = (field: IFormField, value: unknown): string | undef
       const address = value as IAddressValue;
       if (address && typeof address !== 'string' && field.required) {
         if (!(address.street || '').trim() || !(address.city || '').trim()) {
-          return 'Enter at least a street and a city';
+          return failure('Logic_AddressRequired');
         }
       }
       break;
     }
   }
 
-  // custom pattern applies to any text-bearing answer
+  // custom pattern applies to any text-bearing answer; anchored, never throws
   if (field.pattern) {
     const text = String(typeof value === 'object' ? formatValue(field, value) : value);
-    let expression: RegExp | undefined;
-    try {
-      expression = new RegExp(field.pattern);
-    } catch {
-      expression = undefined; // an invalid pattern must never block a submission
-    }
+    const expression = compilePattern(field.pattern);
     if (expression && !expression.test(text)) {
-      return field.patternMessage || 'This answer is not in the expected format';
+      return field.patternMessage
+        ? { code: '', message: field.patternMessage }
+        : failure('Logic_PatternDefault');
     }
   }
 
   return undefined;
+};
+
+/** Returns an error message, or undefined when the value is valid. `messages` overrides the English defaults. */
+export const validateField = (
+  field: IFormField,
+  value: unknown,
+  messages?: IMessageBag
+): string | undefined => {
+  const result = validateFieldResult(field, value);
+  if (!result) {
+    return undefined;
+  }
+  if (result.message !== undefined) {
+    return result.message;
+  }
+  const params = { ...(result.params || {}) };
+  if (result.code === 'Logic_Required' && !params.label) {
+    params.label = msg('Logic_ThisQuestion', undefined, messages);
+  }
+  return msg(result.code, params, messages);
 };
 
 const formatNumberForMessage = (field: IFormField, num: number): string => {
@@ -382,7 +471,7 @@ const asNumber = (value: unknown): number | undefined => {
     return isNaN(value) ? undefined : value;
   }
   if (value instanceof Date) {
-    return value.getTime();
+    return isNaN(value.getTime()) ? undefined : value.getTime();
   }
   if (Array.isArray(value)) {
     return value.length;
@@ -391,41 +480,193 @@ const asNumber = (value: unknown): number | undefined => {
   return isNaN(num) ? undefined : num;
 };
 
-/** Parse a rule's comparison operand, honoring dates and "today". */
-const operandAsNumber = (field: IFormField | undefined, raw: string | undefined): number | undefined => {
+const MS_PER_DAY = 86400000;
+
+/** Calendar-day index (local date, time of day ignored) so comparisons never depend on the hour or time zone. */
+const dayIndex = (date: Date): number =>
+  Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / MS_PER_DAY);
+
+const minutesOfDay = (date: Date): number => date.getHours() * 60 + date.getMinutes();
+
+/**
+ * Parse a date string as a LOCAL date. A bare "2026-03-05" is midnight local
+ * time (new Date("2026-03-05") would be UTC midnight, i.e. the previous evening
+ * west of Greenwich). "today" gives today's date; strings with a time part are
+ * parsed as usual. Returns undefined when unparseable.
+ */
+export const parseLocalDate = (text: string | undefined): Date | undefined => {
+  const trimmed = (text || '').trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  if (/^today$/i.test(trimmed)) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return today;
+  }
+  const dateOnly = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(trimmed);
+  if (dateOnly) {
+    const year = Number(dateOnly[1]);
+    const month = Number(dateOnly[2]) - 1;
+    const day = Number(dateOnly[3]);
+    const local = new Date(year, month, day);
+    // reject overflow such as 2026-02-31
+    return local.getFullYear() === year && local.getMonth() === month && local.getDate() === day
+      ? local
+      : undefined;
+  }
+  const parsed = new Date(trimmed);
+  return isNaN(parsed.getTime()) ? undefined : parsed;
+};
+
+/**
+ * Parse a time-of-day operand ("HH:mm", "H:mm", "HH:mm:ss", "h:mm AM/PM", or a
+ * full date-time string) into minutes after midnight. Undefined when invalid.
+ */
+export const parseTimeToMinutes = (text: string | undefined): number | undefined => {
+  const trimmed = (text || '').trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  const match = /^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]m)?$/i.exec(trimmed);
+  if (match) {
+    let hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    const meridiem = match[3] ? match[3].toLowerCase() : '';
+    if (minutes > 59) {
+      return undefined;
+    }
+    if (meridiem) {
+      if (hours < 1 || hours > 12) {
+        return undefined;
+      }
+      hours = (hours % 12) + (meridiem === 'pm' ? 12 : 0);
+    } else if (hours > 23) {
+      return undefined;
+    }
+    return hours * 60 + minutes;
+  }
+  if (/\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
+    const parsed = new Date(trimmed);
+    return isNaN(parsed.getTime()) ? undefined : minutesOfDay(parsed);
+  }
+  return undefined;
+};
+
+const toDateValue = (raw: unknown): Date | undefined => {
+  if (raw instanceof Date) {
+    return isNaN(raw.getTime()) ? undefined : raw;
+  }
+  if (typeof raw === 'string') {
+    return parseLocalDate(raw);
+  }
+  return undefined;
+};
+
+const isDateLike = (field: IFormField | undefined): boolean =>
+  !!field && (field.type === FieldType.Date || field.type === FieldType.Time);
+
+const NUMERIC_TYPES: FieldType[] = [
+  FieldType.Number,
+  FieldType.Calculated,
+  FieldType.Slider,
+  FieldType.Scale,
+  FieldType.Rating
+];
+
+/** What an answer compares as: a day index for Date, minutes for Time, otherwise a number. */
+const projectAnswer = (field: IFormField, raw: unknown): number | undefined => {
+  if (field.type === FieldType.Date) {
+    const date = toDateValue(raw);
+    return date ? dayIndex(date) : undefined;
+  }
+  if (field.type === FieldType.Time) {
+    if (typeof raw === 'string' && parseTimeToMinutes(raw) !== undefined) {
+      return parseTimeToMinutes(raw);
+    }
+    const date = toDateValue(raw);
+    return date ? minutesOfDay(date) : undefined;
+  }
+  return asNumber(raw);
+};
+
+/** Parse a rule's comparison operand in the same space as projectAnswer. */
+const projectOperand = (field: IFormField, raw: string | undefined): number | undefined => {
   const text = (raw || '').trim();
   if (text.length === 0) {
     return undefined;
   }
-  const isDateField = field && (field.type === FieldType.Date || field.type === FieldType.Time);
-  if (isDateField || /^today$/i.test(text)) {
-    if (/^today$/i.test(text)) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      return today.getTime();
-    }
-    const parsed = new Date(text);
-    if (!isNaN(parsed.getTime())) {
-      return parsed.getTime();
-    }
+  if (field.type === FieldType.Date) {
+    const date = parseLocalDate(text);
+    return date ? dayIndex(date) : undefined;
+  }
+  if (field.type === FieldType.Time) {
+    return parseTimeToMinutes(text);
   }
   const num = Number(text.replace(/,/g, ''));
   return isNaN(num) ? undefined : num;
 };
 
-const evaluateCondition = (
-  condition: ICondition,
-  definition: IFormDefinition,
-  values: IFormValues
-): boolean => {
-  const driver = findField(definition, condition.fieldId);
+/** Selections of a multi-value answer, split on "; " so labels containing a bare ";" survive. */
+export const splitMultiValue = (text: string): string[] =>
+  String(text || '')
+    .split(/;\s+|;$/)
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+
+// ----- visibility (dependency-ordered, hidden drivers count as empty) -----
+
+interface IVisibilityContext {
+  definition: IFormDefinition;
+  values: IFormValues;
+  fieldsById: { [id: string]: IFormField };
+  sectionOfField: { [id: string]: IFormSection };
+  cache: { [id: string]: boolean };
+  inProgress: { [id: string]: boolean };
+}
+
+const createVisibilityContext = (definition: IFormDefinition, values: IFormValues): IVisibilityContext => {
+  const fieldsById: { [id: string]: IFormField } = {};
+  const sectionOfField: { [id: string]: IFormSection } = {};
+  (definition.sections || []).forEach((section) => {
+    (section.fields || []).forEach((f) => {
+      if (!fieldsById[f.id]) {
+        fieldsById[f.id] = f;
+        sectionOfField[f.id] = section;
+      }
+    });
+  });
+  return { definition, values, fieldsById, sectionOfField, cache: {}, inProgress: {} };
+};
+
+const splitParts = (driver: IFormField, raw: unknown): string[] => {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((v) => {
+        if (typeof v === 'object' && v !== null) {
+          const person = v as IPersonInfo & IFormFile;
+          return person.displayName || person.name || '';
+        }
+        return String(v);
+      })
+      .map((p) => p.trim().toLowerCase())
+      .filter((p) => p.length > 0);
+  }
+  if (driver.allowMultiple) {
+    return splitMultiValue(valueAsComparableString(driver, raw)).map((p) => p.toLowerCase());
+  }
+  return [];
+};
+
+const evaluateConditionIn = (condition: ICondition, ctx: IVisibilityContext): boolean => {
+  const driver = ctx.fieldsById[condition.fieldId];
   if (!driver) {
     // a rule pointing at a deleted question can never be satisfied — treating
     // it as "true" used to make branched questions unconditionally visible
     return false;
   }
-  const raw = values[driver.id];
-  const text = valueAsComparableString(driver, raw);
+  // a hidden question's stale answer must not drive other questions
+  const raw = fieldVisibleIn(driver, ctx) ? ctx.values[driver.id] : undefined;
   const operator = condition.operator;
 
   if (UNARY_OPERATORS.indexOf(operator) !== -1) {
@@ -433,49 +674,62 @@ const evaluateCondition = (
     return operator === 'empty' ? empty : !empty;
   }
 
+  const dateLike = isDateLike(driver);
+  const numeric = NUMERIC_TYPES.indexOf(driver.type) !== -1;
+
   if (RANGE_OPERATORS.indexOf(operator) !== -1) {
-    const actual = asNumber(raw);
-    const bound = operandAsNumber(driver, condition.value);
+    const actual = projectAnswer(driver, raw);
+    const bound = projectOperand(driver, condition.value);
     if (actual === undefined || bound === undefined) {
       return false;
     }
     switch (operator) {
       case 'greaterThan':
+      case 'after':
         return actual > bound;
       case 'greaterOrEqual':
         return actual >= bound;
       case 'lessThan':
+      case 'before':
         return actual < bound;
       case 'lessOrEqual':
         return actual <= bound;
-      case 'after':
-        return actual > bound;
-      case 'before':
-        return actual < bound;
       case 'between': {
-        const upper = operandAsNumber(driver, condition.value2);
+        const upper = projectOperand(driver, condition.value2);
         if (upper === undefined) {
           return false;
         }
-        const low = Math.min(bound, upper);
-        const high = Math.max(bound, upper);
-        return actual >= low && actual <= high;
+        return actual >= Math.min(bound, upper) && actual <= Math.max(bound, upper);
       }
       default:
         return false;
     }
   }
 
+  // equality on dates compares calendar days (times compare minutes), numbers compare numerically
+  if ((dateLike || numeric) && (operator === 'equals' || operator === 'notEquals')) {
+    const actual = projectAnswer(driver, raw);
+    const bound = projectOperand(driver, condition.value);
+    if (actual !== undefined && bound !== undefined) {
+      return operator === 'equals' ? actual === bound : actual !== bound;
+    }
+    if (dateLike) {
+      return operator === 'notEquals';
+    }
+  }
+
+  const text = valueAsComparableString(driver, raw);
   const expected = (condition.value || '').toLowerCase();
-  // multi-value answers match if *any* selection matches
-  const parts = text.split(';').map((p) => p.trim().toLowerCase()).filter((p) => p.length > 0);
   const haystack = text.toLowerCase();
+  // multi-value answers match if *any* selection matches
+  const parts = splitParts(driver, raw);
+  const multi = Array.isArray(raw) || driver.allowMultiple === true;
 
   switch (operator) {
     case 'equals':
-      return parts.length > 1 ? parts.indexOf(expected) !== -1 : haystack === expected;
+      return multi ? parts.indexOf(expected) !== -1 : haystack === expected;
     case 'notEquals':
-      return parts.length > 1 ? parts.indexOf(expected) === -1 : haystack !== expected;
+      return multi ? parts.indexOf(expected) === -1 : haystack !== expected;
     case 'contains':
       return haystack.indexOf(expected) !== -1;
     case 'notContains':
@@ -485,11 +739,9 @@ const evaluateCondition = (
   }
 };
 
-/** Evaluate a condition group. An empty or absent group is always satisfied. */
-export const evaluateConditionGroup = (
+const evaluateGroupIn = (
   group: IConditionGroup | undefined,
-  definition: IFormDefinition,
-  values: IFormValues,
+  ctx: IVisibilityContext,
   selfFieldId?: string
 ): boolean => {
   if (!group || !group.conditions || group.conditions.length === 0) {
@@ -499,44 +751,218 @@ export const evaluateConditionGroup = (
   if (usable.length === 0) {
     return true;
   }
-  const results = usable.map((c) => evaluateCondition(c, definition, values));
+  const results = usable.map((c) => evaluateConditionIn(c, ctx));
   return group.match === 'any'
     ? results.filter((r) => r).length > 0
     : results.filter((r) => !r).length === 0;
 };
 
-/** Evaluate a field's visibility, including its section's own rule. */
+/** Memoized, dependency-ordered visibility of one field (its section's rule included). */
+const fieldVisibleIn = (field: IFormField, ctx: IVisibilityContext): boolean => {
+  if (ctx.cache[field.id] !== undefined) {
+    return ctx.cache[field.id];
+  }
+  if (ctx.inProgress[field.id]) {
+    // circular rules: break the cycle by treating the field as visible
+    return true;
+  }
+  ctx.inProgress[field.id] = true;
+  const section = ctx.sectionOfField[field.id];
+  const visible =
+    (!section || evaluateGroupIn(section.visibleWhen, ctx)) &&
+    evaluateGroupIn(field.visibleWhen, ctx, field.id);
+  ctx.inProgress[field.id] = false;
+  ctx.cache[field.id] = visible;
+  return visible;
+};
+
+/**
+ * Visibility of every field in one pass, evaluated in dependency order. Prefer
+ * this over calling isFieldVisible in a loop.
+ */
+export const computeVisibility = (
+  definition: IFormDefinition,
+  values: IFormValues
+): { [fieldId: string]: boolean } => {
+  const ctx = createVisibilityContext(definition, values);
+  const result: { [fieldId: string]: boolean } = {};
+  allFields(definition).forEach((f) => {
+    result[f.id] = fieldVisibleIn(f, ctx);
+  });
+  return result;
+};
+
+/** Evaluate a condition group. An empty or absent group is always satisfied. */
+export const evaluateConditionGroup = (
+  group: IConditionGroup | undefined,
+  definition: IFormDefinition,
+  values: IFormValues,
+  selfFieldId?: string
+): boolean => evaluateGroupIn(group, createVisibilityContext(definition, values), selfFieldId);
+
+/** Evaluate a field's visibility, including its section's own rule and hidden drivers. */
 export const isFieldVisible = (
   field: IFormField,
   definition: IFormDefinition,
   values: IFormValues
-): boolean => {
-  const section = (definition.sections || []).filter(
-    (s) => (s.fields || []).filter((f) => f.id === field.id).length > 0
-  )[0];
-  if (section && !evaluateConditionGroup(section.visibleWhen, definition, values)) {
-    return false;
-  }
-  return evaluateConditionGroup(field.visibleWhen, definition, values, field.id);
-};
+): boolean => fieldVisibleIn(field, createVisibilityContext(definition, values));
 
 export const isSectionVisible = (
   section: IFormSection,
   definition: IFormDefinition,
   values: IFormValues
-): boolean => evaluateConditionGroup(section.visibleWhen, definition, values);
+): boolean => evaluateGroupIn(section.visibleWhen, createVisibilityContext(definition, values));
 
-/** Remove rules that reference fields no longer in the definition. */
-export const pruneDanglingConditions = (definition: IFormDefinition): IFormDefinition => {
-  const ids: { [id: string]: boolean } = {};
+// ----- rule health -----
+
+export type ConditionIssueReason =
+  | 'missingDriver'
+  | 'selfReference'
+  | 'operator'
+  | 'value'
+  | 'operand'
+  | 'incomplete';
+
+export interface IConditionIssue {
+  /** owner field of the rule (undefined for a section rule) */
+  fieldId?: string;
+  /** owner section of a section rule */
+  sectionId?: string;
+  conditionIndex: number;
+  /** the field the rule reads */
+  driverId: string;
+  reason: ConditionIssueReason;
+  /**
+   * 'broken' rules can never behave as the author intended (deleted driver,
+   * operator no longer offered, value not among the options, unparseable
+   * operand); 'incomplete' rules are merely unfinished (blank comparison value).
+   */
+  severity: 'broken' | 'incomplete';
+}
+
+const optionsForValueCheck = (driver: IFormField): string[] | undefined => {
+  switch (driver.type) {
+    case FieldType.Choice:
+      return driver.allowOther ? undefined : effectiveChoices(driver);
+    case FieldType.ImageChoice:
+      return (driver.imageChoices || []).map((o) => (o.label || '').trim()).filter((l) => l.length > 0);
+    case FieldType.YesNo:
+    case FieldType.Consent:
+      return ['Yes', 'No'];
+    default:
+      return undefined;
+  }
+};
+
+const checkCondition = (
+  condition: ICondition,
+  driver: IFormField | undefined,
+  ownerFieldId: string | undefined
+): { reason: ConditionIssueReason; severity: 'broken' | 'incomplete' } | undefined => {
+  if (!condition.fieldId || !driver) {
+    return { reason: 'missingDriver', severity: 'broken' };
+  }
+  if (ownerFieldId && condition.fieldId === ownerFieldId) {
+    return { reason: 'selfReference', severity: 'broken' };
+  }
+  if (operatorsForField(driver).indexOf(condition.operator) === -1) {
+    return { reason: 'operator', severity: 'broken' };
+  }
+  if (UNARY_OPERATORS.indexOf(condition.operator) !== -1) {
+    return undefined;
+  }
+  const value = (condition.value || '').trim();
+
+  if (RANGE_OPERATORS.indexOf(condition.operator) !== -1 || ((isDateLike(driver) || NUMERIC_TYPES.indexOf(driver.type) !== -1))) {
+    if (value.length === 0) {
+      return { reason: 'incomplete', severity: 'incomplete' };
+    }
+    if (projectOperand(driver, value) === undefined) {
+      return { reason: 'operand', severity: 'broken' };
+    }
+    if (condition.operator === 'between') {
+      const upper = (condition.value2 || '').trim();
+      if (upper.length === 0) {
+        return { reason: 'incomplete', severity: 'incomplete' };
+      }
+      if (projectOperand(driver, upper) === undefined) {
+        return { reason: 'operand', severity: 'broken' };
+      }
+    }
+    return undefined;
+  }
+
+  const options = optionsForValueCheck(driver);
+  if (options) {
+    if (value.length === 0) {
+      return { reason: 'incomplete', severity: 'incomplete' };
+    }
+    const lower = value.toLowerCase();
+    const known = options.map((o) => o.toLowerCase());
+    const fits =
+      condition.operator === 'contains' || condition.operator === 'notContains'
+        ? known.filter((o) => o.indexOf(lower) !== -1).length > 0
+        : known.indexOf(lower) !== -1;
+    if (!fits) {
+      return { reason: 'value', severity: 'broken' };
+    }
+  }
+  return undefined;
+};
+
+/** Every branching rule that no longer makes sense, for the designer to flag or prune. */
+export const conditionIssues = (definition: IFormDefinition): IConditionIssue[] => {
+  const byId: { [id: string]: IFormField } = {};
   allFields(definition).forEach((f) => {
-    ids[f.id] = true;
+    byId[f.id] = f;
   });
-  const prune = (group: IConditionGroup | undefined): IConditionGroup | undefined => {
+  const issues: IConditionIssue[] = [];
+  const scan = (group: IConditionGroup | undefined, fieldId?: string, sectionId?: string): void => {
+    ((group && group.conditions) || []).forEach((condition, index) => {
+      const problem = checkCondition(condition, byId[condition.fieldId], fieldId);
+      if (problem) {
+        issues.push({
+          fieldId: fieldId,
+          sectionId: sectionId,
+          conditionIndex: index,
+          driverId: condition.fieldId,
+          reason: problem.reason,
+          severity: problem.severity
+        });
+      }
+    });
+  };
+  (definition.sections || []).forEach((section) => {
+    scan(section.visibleWhen, undefined, section.id);
+    (section.fields || []).forEach((f) => scan(f.visibleWhen, f.id, section.id));
+  });
+  return issues;
+};
+
+/**
+ * Remove branching rules that can no longer work: deleted drivers, operators
+ * the driver's (possibly changed) type no longer offers, values that are no
+ * longer among the options, unparseable operands. Blank-value rules are kept
+ * (they are just unfinished) unless `includeIncomplete` is set. Mutates and
+ * returns the definition.
+ */
+export const pruneInvalidConditions = (
+  definition: IFormDefinition,
+  options?: { includeIncomplete?: boolean }
+): IFormDefinition => {
+  const dropIncomplete = !!(options && options.includeIncomplete);
+  const byId: { [id: string]: IFormField } = {};
+  allFields(definition).forEach((f) => {
+    byId[f.id] = f;
+  });
+  const prune = (group: IConditionGroup | undefined, ownerFieldId?: string): IConditionGroup | undefined => {
     if (!group) {
       return undefined;
     }
-    const conditions = (group.conditions || []).filter((c) => ids[c.fieldId]);
+    const conditions = (group.conditions || []).filter((c) => {
+      const problem = checkCondition(c, byId[c.fieldId], ownerFieldId);
+      return !problem || (problem.severity === 'incomplete' && !dropIncomplete);
+    });
     return conditions.length > 0 ? { match: group.match, conditions } : undefined;
   };
   definition.sections.forEach((section) => {
@@ -547,7 +973,7 @@ export const pruneDanglingConditions = (definition: IFormDefinition): IFormDefin
       delete section.visibleWhen;
     }
     section.fields.forEach((field) => {
-      const fieldRule = prune(field.visibleWhen);
+      const fieldRule = prune(field.visibleWhen, field.id);
       if (fieldRule) {
         field.visibleWhen = fieldRule;
       } else {
@@ -558,27 +984,42 @@ export const pruneDanglingConditions = (definition: IFormDefinition): IFormDefin
   return definition;
 };
 
+/** Remove rules that reference fields no longer in the definition (and other unworkable rules). */
+export const pruneDanglingConditions = (definition: IFormDefinition): IFormDefinition =>
+  pruneInvalidConditions(definition);
+
 // ---------------------------------------------------------------------------
 // calculated fields
 // ---------------------------------------------------------------------------
 
 /**
- * Recompute every Calculated field from the current answers. Runs a couple of
- * passes so a calculation that references another calculation still resolves.
+ * Recompute every Calculated field from the current answers. Iterates until the
+ * values stop changing (bounded by the number of calculated fields + 1, so a
+ * chain of calculations resolves and a circular one cannot loop forever).
+ * Answers to hidden questions are ignored, exactly as they are at submit time.
  */
 export const applyCalculatedFields = (definition: IFormDefinition, values: IFormValues): IFormValues => {
   const calculated = allFields(definition).filter((f) => f.type === FieldType.Calculated && f.formula);
   if (calculated.length === 0) {
     return values;
   }
+  const byTitle: { [title: string]: IFormField } = {};
+  allFields(definition).forEach((f) => {
+    const key = (f.title || '').trim().toLowerCase();
+    if (key && !byTitle[key]) {
+      byTitle[key] = f;
+    }
+  });
   const next: IFormValues = { ...values };
-  const passes = Math.min(calculated.length, 5);
+  const passes = calculated.length + 1;
   for (let pass = 0; pass < passes; pass++) {
+    // visibility can itself depend on a calculated answer, so re-derive each pass
+    const visibility = computeVisibility(definition, next);
     let changed = false;
     calculated.forEach((field) => {
       const result = evaluateFormula(field.formula || '', (name) => {
-        const referenced = findFieldByTitle(definition, name);
-        if (!referenced) {
+        const referenced = byTitle[name.trim().toLowerCase()];
+        if (!referenced || visibility[referenced.id] === false) {
           return undefined;
         }
         return asNumber(next[referenced.id]);
@@ -668,11 +1109,7 @@ export const normalizeFromSharePoint = (field: IFormField, raw: unknown): unknow
   }
 };
 
-const splitMulti = (text: string): string[] =>
-  String(text || '')
-    .split(';')
-    .map((v) => v.trim())
-    .filter((v) => v.length > 0);
+const splitMulti = (text: string): string[] => splitMultiValue(text);
 
 const parseJsonObject = (text: string): ILikertValue => {
   try {
@@ -731,23 +1168,30 @@ const groupThousands = (text: string): string => {
  * Human-readable rendering of a form value. Accepts the form-state shape, so
  * SharePoint values must go through normalizeFromSharePoint first.
  */
-export const formatValue = (field: IFormField, value: unknown): string => {
+export const formatValue = (
+  field: IFormField,
+  value: unknown,
+  messages?: IMessageBag,
+  locale?: string
+): string => {
   if (value === undefined || value === null || value === '') {
     return '';
   }
   switch (field.type) {
     case FieldType.YesNo:
-      return value === true ? 'Yes' : 'No';
+      return value === true ? msg('Logic_Yes', undefined, messages) : msg('Logic_No', undefined, messages);
     case FieldType.Consent:
-      return value === true ? 'Agreed' : 'Not agreed';
+      return value === true
+        ? msg('Logic_Agreed', undefined, messages)
+        : msg('Logic_NotAgreed', undefined, messages);
     case FieldType.Date:
       if (value instanceof Date) {
-        return field.includeTime ? value.toLocaleString() : value.toLocaleDateString();
+        return field.includeTime ? value.toLocaleString(locale) : value.toLocaleDateString(locale);
       }
       return String(value);
     case FieldType.Time:
       return value instanceof Date
-        ? value.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+        ? value.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })
         : String(value);
     case FieldType.Number:
     case FieldType.Calculated:
@@ -793,7 +1237,7 @@ export const formatValue = (field: IFormField, value: unknown): string => {
         ? (value as IFormFile[]).map((f) => f.name).join(MULTI_SEPARATOR)
         : String(value);
     case FieldType.Signature:
-      return String(value).indexOf('data:') === 0 ? 'Signed' : String(value);
+      return String(value).indexOf('data:') === 0 ? msg('Logic_Signed', undefined, messages) : String(value);
     case FieldType.RichText:
       return stripHtml(String(value));
     case FieldType.Content:
@@ -804,8 +1248,12 @@ export const formatValue = (field: IFormField, value: unknown): string => {
 };
 
 /** Convenience wrapper: normalize a SharePoint value and format it. */
-export const formatSharePointValue = (field: IFormField, raw: unknown): string =>
-  formatValue(field, normalizeFromSharePoint(field, raw));
+export const formatSharePointValue = (
+  field: IFormField,
+  raw: unknown,
+  messages?: IMessageBag,
+  locale?: string
+): string => formatValue(field, normalizeFromSharePoint(field, raw), messages, locale);
 
 /** String rendering used by conditional rules and search. */
 export const valueAsComparableString = (field: IFormField | undefined, value: unknown): string => {
@@ -821,7 +1269,7 @@ export const valueAsComparableString = (field: IFormField | undefined, value: un
         }
         return String(v);
       })
-      .join(';');
+      .join(MULTI_SEPARATOR);
   }
   if (field && (field.type === FieldType.YesNo || field.type === FieldType.Consent)) {
     return value === true ? 'Yes' : 'No';
@@ -834,7 +1282,7 @@ export const valueAsComparableString = (field: IFormField | undefined, value: un
   }
   if (field && field.type === FieldType.Likert) {
     const answers = value as ILikertValue;
-    return Object.keys(answers).map((row) => answers[row]).filter((a) => a).join(';');
+    return Object.keys(answers).map((row) => answers[row]).filter((a) => a).join(MULTI_SEPARATOR);
   }
   if (field && field.type === FieldType.RichText) {
     return stripHtml(String(value));
@@ -864,6 +1312,10 @@ export interface IResponseEmailOptions {
   accentColor: string;
   /** when set, a "View in Microsoft Lists" button links to the list item */
   itemUrl?: string;
+  /** translated Logic_ strings (optional) */
+  messages?: IMessageBag;
+  /** locale for dates in the answers (optional) */
+  locale?: string;
 }
 
 /** Inline-styled HTML email summarizing one response — safe for Outlook. */
@@ -873,14 +1325,15 @@ export const buildResponseEmailHtml = (
   options: IResponseEmailOptions
 ): string => {
   const accent = options.accentColor || '#0078d4';
+  const visibility = computeVisibility(definition, values);
   const rows = inputFields(definition)
-    .filter((field) => isFieldVisible(field, definition, values))
+    .filter((field) => visibility[field.id] !== false)
     .map((field) => {
-      const answer = formatValue(field, values[field.id]);
+      const answer = formatValue(field, values[field.id], options.messages, options.locale);
       return (
         '<tr>' +
         '<td style="padding:8px 16px 8px 0;font-size:13px;color:#605e5c;vertical-align:top;white-space:nowrap;">' +
-        escapeHtml(field.title || 'Question') +
+        escapeHtml(field.title || msg('Logic_EmailQuestion', undefined, options.messages)) +
         '</td>' +
         '<td style="padding:8px 0;font-size:14px;color:#323130;vertical-align:top;">' +
         (answer ? escapeHtml(answer) : '<span style="color:#a19f9d;">&mdash;</span>') +
@@ -896,7 +1349,8 @@ export const buildResponseEmailHtml = (
       '" style="background:' +
       accent +
       ';color:#ffffff;text-decoration:none;padding:9px 20px;border-radius:4px;font-size:14px;display:inline-block;">' +
-      'View in Microsoft Lists</a></p>'
+      escapeHtml(msg('Logic_EmailViewItem', undefined, options.messages)) +
+      '</a></p>'
     : '';
 
   return (
@@ -916,7 +1370,9 @@ export const buildResponseEmailHtml = (
     rows +
     '</table>' +
     button +
-    '<p style="margin:24px 0 0;font-size:11px;color:#a19f9d;">Sent automatically by Smart Forms.</p>' +
+    '<p style="margin:24px 0 0;font-size:11px;color:#a19f9d;">' +
+    escapeHtml(msg('Logic_EmailFooter', undefined, options.messages)) +
+    '</p>' +
     '</div>' +
     '</div>'
   );
@@ -926,10 +1382,16 @@ export const buildResponseEmailHtml = (
 // export
 // ---------------------------------------------------------------------------
 
+/** A cell that is already a real number (optionally signed / grouped / currency / percent). */
+const NUMERIC_CELL = /^[+-]?[$\u20AC\u00A3\u00A5]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)?(?:[eE][+-]?\d+)?%?$/;
+
+const isNumericCell = (text: string): boolean => /\d/.test(text) && NUMERIC_CELL.test(text);
+
 const csvEscape = (value: string): string => {
   const text = value === undefined || value === null ? '' : String(value);
-  // a leading =, +, - or @ makes Excel treat the cell as a formula
-  const guarded = /^[=+\-@]/.test(text) ? "'" + text : text;
+  // a leading =, +, -, @, tab or CR makes Excel treat the cell as a formula —
+  // but a genuine number such as -5 must stay numeric, so only guard text
+  const guarded = /^[=+\-@\t\r]/.test(text) && !isNumericCell(text) ? "'" + text : text;
   if (/[",\r\n]/.test(guarded)) {
     return '"' + guarded.replace(/"/g, '""') + '"';
   }
@@ -943,17 +1405,30 @@ export interface ICsvRow {
   values: Record<string, unknown>;
 }
 
+export interface ICsvOptions {
+  /** locale for the Submitted column and date answers (browser default when omitted) */
+  locale?: string;
+  /** translated Logic_ strings (headers, Yes/No labels) */
+  messages?: IMessageBag;
+}
+
 /** Build CSV text for the responses grid. */
-export const buildCsv = (fields: IFormField[], rows: ICsvRow[]): string => {
+export const buildCsv = (fields: IFormField[], rows: ICsvRow[], options?: ICsvOptions): string => {
+  const locale = options ? options.locale : undefined;
+  const messages = options ? options.messages : undefined;
   const columns = fields.filter((f) => isInputType(f.type));
-  const header = ['Response ID', 'Submitted', 'Submitted by'].concat(columns.map((f) => f.title));
+  const header = [
+    msg('Logic_CsvResponseId', undefined, messages),
+    msg('Logic_CsvSubmitted', undefined, messages),
+    msg('Logic_CsvSubmittedBy', undefined, messages)
+  ].concat(columns.map((f) => f.title));
   const lines = [header.map(csvEscape).join(',')];
   rows.forEach((row) => {
     const cells = [
       row.id === undefined ? '' : String(row.id),
-      row.created.toLocaleString(),
+      row.created.toLocaleString(locale),
       row.createdBy
-    ].concat(columns.map((f) => formatSharePointValue(f, row.values[f.internalName])));
+    ].concat(columns.map((f) => formatSharePointValue(f, row.values[f.internalName], messages, locale)));
     lines.push(cells.map(csvEscape).join(','));
   });
   // UTF-8 BOM so Excel opens the file with correct encoding
@@ -1003,7 +1478,12 @@ export type IssueSeverity = 'error' | 'warning';
 
 export interface IFormIssue {
   severity: IssueSeverity;
+  /** English (or translated, when a message bag was passed) text */
   message: string;
+  /** Logic_ message key, so callers can re-render in another language */
+  code?: string;
+  /** tokens used to build `message` */
+  params?: { [token: string]: string | number };
   /** field the owner should jump to, when the issue is field-specific */
   fieldId?: string;
   sectionId?: string;
@@ -1011,15 +1491,32 @@ export interface IFormIssue {
 
 /**
  * Problems worth surfacing before the owner provisions columns and hands out a
- * link. Errors block publishing; warnings are advisory.
+ * link. Errors block publishing; warnings are advisory. `messages` optionally
+ * supplies translated Logic_Issue_* strings.
  */
-export const validateDefinition = (definition: IFormDefinition): IFormIssue[] => {
+export const validateDefinition = (definition: IFormDefinition, messages?: IMessageBag): IFormIssue[] => {
   const issues: IFormIssue[] = [];
+  const add = (
+    severity: IssueSeverity,
+    code: string,
+    params?: { [token: string]: string | number },
+    where?: { fieldId?: string; sectionId?: string }
+  ): void => {
+    issues.push({
+      severity: severity,
+      code: code,
+      params: params,
+      message: msg(code, params, messages),
+      fieldId: where ? where.fieldId : undefined,
+      sectionId: where ? where.sectionId : undefined
+    });
+  };
+
   const fields = allFields(definition);
   const inputs = fields.filter((f) => isInputType(f.type));
 
   if (inputs.length === 0) {
-    issues.push({ severity: 'error', message: 'Add at least one question before collecting responses.' });
+    add('error', 'Logic_Issue_NoQuestions');
   }
 
   const titleCounts: { [key: string]: number } = {};
@@ -1031,74 +1528,52 @@ export const validateDefinition = (definition: IFormDefinition): IFormIssue[] =>
   });
 
   fields.forEach((field) => {
-    const label = field.title ? '"' + field.title + '"' : 'An untitled question';
+    const label = field.title
+      ? '"' + field.title + '"'
+      : msg('Logic_UntitledQuestion', undefined, messages);
+    const where = { fieldId: field.id };
 
     if (isInputType(field.type) && !(field.title || '').trim()) {
-      issues.push({
-        severity: 'warning',
-        fieldId: field.id,
-        message: 'A question has no text — it will be named automatically when you publish.'
-      });
+      add('warning', 'Logic_Issue_NoTitle', undefined, where);
     }
 
     if (isInputType(field.type) && titleCounts[(field.title || '').trim().toLowerCase()] > 1) {
-      issues.push({
-        severity: 'warning',
-        fieldId: field.id,
-        message: label + ' shares its text with another question, which makes results harder to read.'
-      });
+      add('warning', 'Logic_Issue_DuplicateTitle', { label: label }, where);
     }
 
-    const needsChoices =
-      field.type === FieldType.Choice || field.type === FieldType.Ranking;
+    const needsChoices = field.type === FieldType.Choice || field.type === FieldType.Ranking;
     if (needsChoices && effectiveChoices(field).length < 2) {
-      issues.push({
-        severity: 'error',
-        fieldId: field.id,
-        message: label + ' needs at least two options.'
-      });
+      add('error', 'Logic_Issue_NeedTwoOptions', { label: label }, where);
     }
 
     if (field.type === FieldType.ImageChoice) {
       const options = field.imageChoices || [];
       if (options.length < 2) {
-        issues.push({ severity: 'error', fieldId: field.id, message: label + ' needs at least two options.' });
+        add('error', 'Logic_Issue_NeedTwoOptions', { label: label }, where);
       }
       if (options.filter((o) => !(o.imageUrl || '').trim()).length > 0) {
-        issues.push({
-          severity: 'warning',
-          fieldId: field.id,
-          message: label + ' has options with no image — they will show as text tiles.'
-        });
+        add('warning', 'Logic_Issue_ImageNoImage', { label: label }, where);
       }
     }
 
     if (field.type === FieldType.Likert) {
       if ((field.likertRows || []).filter((r) => (r || '').trim()).length === 0) {
-        issues.push({ severity: 'error', fieldId: field.id, message: label + ' needs at least one row.' });
+        add('error', 'Logic_Issue_LikertNeedRow', { label: label }, where);
       }
       if ((field.likertColumns || []).filter((c) => (c || '').trim()).length < 2) {
-        issues.push({ severity: 'error', fieldId: field.id, message: label + ' needs at least two scale columns.' });
+        add('error', 'Logic_Issue_LikertNeedColumns', { label: label }, where);
       }
     }
 
     if (field.type === FieldType.Lookup && !field.lookupListId) {
-      issues.push({
-        severity: 'error',
-        fieldId: field.id,
-        message: label + ' has no source list selected.'
-      });
+      add('error', 'Logic_Issue_NoLookupList', { label: label }, where);
     }
 
     if (field.type === FieldType.Calculated) {
       if (!(field.formula || '').trim()) {
-        issues.push({ severity: 'error', fieldId: field.id, message: label + ' has no formula.' });
+        add('error', 'Logic_Issue_NoFormula', { label: label }, where);
       } else if (evaluateFormula(field.formula || '', () => 1) === undefined) {
-        issues.push({
-          severity: 'error',
-          fieldId: field.id,
-          message: label + ' has a formula that cannot be worked out. Check the brackets and operators.'
-        });
+        add('error', 'Logic_Issue_BadFormula', { label: label }, where);
       } else {
         const missing = (field.formula || '')
           .split(/[{}]/)
@@ -1106,65 +1581,53 @@ export const validateDefinition = (definition: IFormDefinition): IFormIssue[] =>
           .map((name) => name.trim())
           .filter((name) => name.length > 0 && !findFieldByTitle(definition, name));
         if (missing.length > 0) {
-          issues.push({
-            severity: 'warning',
-            fieldId: field.id,
-            message: label + ' refers to questions that do not exist: ' + missing.join(', ') + '.'
-          });
+          add('warning', 'Logic_Issue_MissingRefs', { label: label, names: missing.join(', ') }, where);
         }
       }
     }
 
-    if (field.pattern) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-        new RegExp(field.pattern);
-      } catch {
-        issues.push({
-          severity: 'error',
-          fieldId: field.id,
-          message: label + ' has an invalid validation pattern.'
-        });
-      }
-    }
-
-    if (field.visibleWhen) {
-      const broken = (field.visibleWhen.conditions || []).filter(
-        (c) => !c.fieldId || !findField(definition, c.fieldId)
-      );
-      if (broken.length > 0) {
-        issues.push({
-          severity: 'error',
-          fieldId: field.id,
-          message: label + ' has a branching rule pointing at a deleted question.'
-        });
-      }
-      const selfReference = (field.visibleWhen.conditions || []).filter((c) => c.fieldId === field.id);
-      if (selfReference.length > 0) {
-        issues.push({
-          severity: 'error',
-          fieldId: field.id,
-          message: label + ' has a branching rule that refers to itself.'
-        });
-      }
+    if (field.pattern && !compilePattern(field.pattern)) {
+      add('error', 'Logic_Issue_BadPattern', { label: label }, where);
     }
 
     if (field.required && field.readOnly && field.type !== FieldType.Calculated) {
-      issues.push({
-        severity: 'warning',
-        fieldId: field.id,
-        message: label + ' is both required and read-only, so it can only be answered by a prefilled link.'
-      });
+      add('warning', 'Logic_Issue_RequiredReadOnly', { label: label }, where);
     }
+  });
+
+  // branching rules (field and section level)
+  const sectionTitleOf: { [id: string]: string } = {};
+  definition.sections.forEach((section) => {
+    sectionTitleOf[section.id] = section.title;
+  });
+  const reported: { [key: string]: boolean } = {};
+  conditionIssues(definition).forEach((issue) => {
+    if (issue.severity !== 'broken') {
+      return;
+    }
+    const owner = issue.fieldId ? findField(definition, issue.fieldId) : undefined;
+    const label = owner
+      ? owner.title
+        ? '"' + owner.title + '"'
+        : msg('Logic_UntitledQuestion', undefined, messages)
+      : '"' + (sectionTitleOf[issue.sectionId || ''] || '') + '"';
+    const code =
+      issue.reason === 'missingDriver'
+        ? 'Logic_Issue_BrokenRule'
+        : issue.reason === 'selfReference'
+          ? 'Logic_Issue_SelfRule'
+          : 'Logic_Issue_RuleMismatch';
+    const key = (issue.fieldId || issue.sectionId || '') + '|' + code;
+    if (reported[key]) {
+      return;
+    }
+    reported[key] = true;
+    add('error', code, { label: label }, { fieldId: issue.fieldId, sectionId: issue.fieldId ? undefined : issue.sectionId });
   });
 
   definition.sections.forEach((section) => {
     if (definition.sections.length > 1 && (section.fields || []).length === 0) {
-      issues.push({
-        severity: 'warning',
-        sectionId: section.id,
-        message: 'A section has no questions and will be skipped.'
-      });
+      add('warning', 'Logic_Issue_EmptySection', undefined, { sectionId: section.id });
     }
   });
 
@@ -1172,11 +1635,12 @@ export const validateDefinition = (definition: IFormDefinition): IFormIssue[] =>
     const open = new Date(definition.settings.openDate);
     const close = new Date(definition.settings.closeDate);
     if (!isNaN(open.getTime()) && !isNaN(close.getTime()) && close <= open) {
-      issues.push({
-        severity: 'error',
-        message: 'The close date is on or before the open date, so the form will never accept responses.'
-      });
+      add('error', 'Logic_Issue_CloseBeforeOpen');
     }
+  }
+
+  if (definition.settings.approvalNotify && !definition.settings.enableApproval) {
+    add('warning', 'Logic_Issue_ApprovalNotifyWithoutApproval');
   }
 
   return issues;
@@ -1193,21 +1657,27 @@ export interface IAvailability {
   message: string;
 }
 
-/** Whether the form is currently accepting responses. */
+/** Whether the form is currently accepting responses. `context.messages` / `context.locale` localize the text. */
 export const formAvailability = (
   definition: IFormDefinition,
-  context: { responseCount?: number; alreadyAnswered?: boolean; now?: Date }
+  context: {
+    responseCount?: number;
+    alreadyAnswered?: boolean;
+    now?: Date;
+    messages?: IMessageBag;
+    locale?: string;
+  }
 ): IAvailability => {
   const settings = definition.settings;
   const now = context.now || new Date();
-  const fallback = settings.closedMessage || 'This form is no longer accepting responses.';
+  const fallback = settings.closedMessage || msg('Logic_ClosedDefault', undefined, context.messages);
 
   if (settings.openDate) {
     const open = new Date(settings.openDate);
     if (!isNaN(open.getTime()) && now < open) {
       return {
         state: 'notYetOpen',
-        message: 'This form opens on ' + open.toLocaleString() + '.'
+        message: msg('Logic_NotYetOpen', { date: open.toLocaleString(context.locale) }, context.messages)
       };
     }
   }
@@ -1226,7 +1696,10 @@ export const formAvailability = (
     return { state: 'full', message: fallback };
   }
   if (settings.oneResponsePerPerson && context.alreadyAnswered) {
-    return { state: 'alreadyAnswered', message: 'You have already responded to this form. Thank you!' };
+    return {
+      state: 'alreadyAnswered',
+      message: msg('Logic_AlreadyResponded', undefined, context.messages)
+    };
   }
   return { state: 'open', message: '' };
 };
@@ -1324,6 +1797,10 @@ export const OPERATOR_LABELS: { key: ConditionOperator; text: string }[] = [
   { key: 'after', text: 'is after' }
 ];
 
+/** Operator labels in the caller's language (falls back to the English defaults). */
+export const operatorLabels = (messages?: IMessageBag): { key: ConditionOperator; text: string }[] =>
+  OPERATOR_LABELS.map((entry) => ({ key: entry.key, text: msg('Logic_Op_' + entry.key, undefined, messages) }));
+
 /** Operators offered for a given driver field type. */
 export const operatorsForField = (field: IFormField | undefined): ConditionOperator[] => {
   if (!field) {
@@ -1338,7 +1815,7 @@ export const operatorsForField = (field: IFormField | undefined): ConditionOpera
       return ['equals', 'notEquals', 'greaterThan', 'greaterOrEqual', 'lessThan', 'lessOrEqual', 'between', 'empty', 'notEmpty'];
     case FieldType.Date:
     case FieldType.Time:
-      return ['before', 'after', 'between', 'empty', 'notEmpty'];
+      return ['equals', 'notEquals', 'before', 'after', 'between', 'empty', 'notEmpty'];
     case FieldType.YesNo:
     case FieldType.Consent:
       return ['equals', 'notEquals'];

@@ -1,6 +1,6 @@
 # Smart Forms — User Guide
 
-**Version 1.0.0**
+**Version 1.1.0**
 **Applies to:** SharePoint Online
 
 ---
@@ -51,7 +51,7 @@ That last part is what sets it apart from a standalone forms tool: your data was
 - **Analysts** who need a dashboard and segment-by-question breakdowns without exporting to Excel first
 - **Respondents** — anyone filling in a shared form link; no SharePoint or Smart Forms knowledge required
 
-> **Note:** The designer and results tabs only appear for people with **Manage Lists** permission on the response list. Everyone else — including anonymous or lightly-licensed users with a share link — sees only the form itself.
+> **Note:** The designer and results tabs only appear for people with **Manage Lists** permission on the response list. Everyone else — anyone who opens a share link — sees only the form itself. Smart Forms is an SPFx web part, so respondents must be **signed in**; anonymous access is not supported. Recipients need at least read access to the page's site plus permission to add items to the response list.
 
 ---
 
@@ -139,7 +139,7 @@ Help text, placeholder text, a default answer, a custom required-message, a read
 
 ## Form Settings
 
-The gear button in the owner bar opens **Form settings**, a panel with five tabs:
+The gear button in the owner bar opens **Form settings**, a panel with five tabs (Notifications also holds the approval workflow, and Access holds "allow respondents to edit their response"):
 
 ![Form settings panel — Appearance tab, showing accent color swatches and the header icon grid](docs/screenshots/03_form_settings_appearance.png)
 
@@ -148,8 +148,8 @@ The gear button in the owner bar opens **Form settings**, a panel with five tabs
 | **Basics** | Title, description, single-page or wizard layout, question numbering, question shuffling |
 | **Appearance** | Accent color (eight presets plus a custom picker) and an optional header icon — every other color on the form derives from the site theme automatically, so it stays legible on light and dark sites |
 | **After submit** | Submit button text, thank-you title and message, and whether to offer a "Submit another response" button |
-| **Notifications** | Who gets emailed on each response, and whether respondents get a copy of their own answers |
-| **Access** | Open/close dates, a response cap, one-response-per-person, save-and-resume, and the message shown once the form is closed |
+| **Notifications** | Who gets emailed on each response, whether respondents get a copy of their own answers, **Enable approval workflow** and **Email respondent on decision** |
+| **Access** | Open/close dates, a response cap, one-response-per-person, save-and-resume, **Allow respondents to edit their response**, and the message shown once the form is closed |
 
 Notification emails go through SharePoint's own send-email API (`no-reply@sharepointonline.com`), so recipients must be users inside your Microsoft 365 organization — external addresses are silently dropped. A failed notification never blocks the response itself from being saved.
 
@@ -186,9 +186,31 @@ Once your form is ready, click **Collect responses** (it becomes **Share** after
 | Page URL + `?sfview=fill` (what **Collect responses** copies) | Everyone, including owners, sees just the form — useful for testing exactly what a respondent sees |
 | Share link + `&<ColumnName>=value` | Pre-answers a question using its internal column name |
 
+### Sharing from Microsoft Teams
+
+When the web part runs in a Teams tab, the share dialog builds the link from the SharePoint page URL rather than the Teams window, so it works when pasted anywhere. Recipients still need access to the site. If your browser blocks the Copy button, the link is selected for you to copy with Ctrl+C.
+
 ### URL Prefill
 
 Add `&<ColumnName>=value` to a share link to pre-answer a question — for example `&SFDepartment=Finance`. Combine this with a question's **Read-only** validation setting to hand out links where a value is pre-filled and can't be changed, which is useful for department- or campaign-specific variants of the same form.
+
+> **Prefill is not a security boundary.** Anyone with the link can edit the URL or, for editable questions, change the answer. Do not rely on a prefilled value (or a read-only question) to prove who someone is or to restrict access.
+
+### Editing a Response
+
+With **Allow respondents to edit their response** on, a respondent who opens the form again sees their own earlier submission and can update it. Each person can edit only responses they created.
+
+### Approval Workflow
+
+Turn on **Enable approval workflow** (Settings, Notifications) and publish again: approval columns are added to the response list. Owners then approve, reject or reset a response, with an optional comment, from the Responses tab (single or bulk). Switch on **Email respondent on decision** to notify the respondent when a decision is made (organization users only).
+
+### Version History & Restore
+
+The **History** button in the owner bar lists earlier saved versions of the form (date and author). Use **Preview** to see how many questions a version has, and **Restore** to load it into the designer after a confirmation. A banner offers **Undo restore**. Restoring changes the form definition only: new questions get list columns when you next use **Collect responses**, and columns for questions that exist now but not in the restored version remain in the list (their names are reserved so they are not reused). History needs versioning enabled on the hidden "Smart Forms Config" list (on by default when Smart Forms creates it); if it is unavailable the panel says so.
+
+### Languages and Right-to-Left
+
+The interface is translated into 30 languages and follows the language of the SharePoint page. Dates use the page culture. For Arabic, Hebrew, Persian and Urdu the whole web part mirrors to right-to-left automatically.
 
 ### Permissions Reminder
 
@@ -288,7 +310,9 @@ To change the response list after a form has been built, put the page in edit mo
 | **Runs as the signed-in user** | All reads and writes use the current user's own SharePoint permissions — the web part has no elevated access of its own |
 | **Designer and results are gated** | Only users with **Manage Lists** on the response list see the Questions and Responses tabs; everyone else sees only the form |
 | **Submissions require Add Items** | Respondents need this right on the response list to submit; the share dialog reminds owners of this |
+| **Sign-in required** | The web part runs only for signed-in users; there is no anonymous access. Share-link recipients need at least read access to the site |
 | **Access rules are form-enforced, not SharePoint-enforced** | Open/close dates, response caps, and one-response-per-person are all applied by the form's own logic — someone with direct Add Items access to the list could still add an item without going through these rules |
+| **Prefill is not a security boundary** | URL prefill values are ordinary query-string text that the recipient can change |
 | **Rich text is sanitized on display** | Smart Forms' own rendering strips unsafe markup from stored rich-text answers before showing them |
 
 ---
@@ -380,7 +404,7 @@ If the web part shows nothing at all and the console has no `[SmartForms]` lines
 - Results views load the newest 20,000 responses; beyond that the views show a notice, though the list itself remains complete
 - A question's type (and a choice question's single/multi setting) is locked once its column has been published
 - Lookup questions store the resolved option *text*, not a link to the source item — responses stay readable if the source list changes, but a later rename in the source list is not reflected in existing responses
-- Addresses are stored as one formatted line rather than separate columns, so address parts can't be analysed independently
+- Addresses are stored as one formatted line rather than separate columns, so address parts can't be analyzed independently
 - Access rules (open/close dates, response caps, one-per-person) are enforced by the form, not by SharePoint — anyone with direct Add Items permission on the list could still add an item without going through them
 - The rich text editor covers bold, italic, underline, and lists — not tables or images
 - Save-and-resume is available on single-page forms only, not wizard forms

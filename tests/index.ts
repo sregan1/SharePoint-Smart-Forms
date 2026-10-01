@@ -1,3 +1,5 @@
+import './spFieldXml.tests';
+import './logic.tests';
 import {
   assertClose,
   assertContains,

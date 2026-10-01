@@ -1,4 +1,6 @@
 import * as React from 'react';
+import * as strings from 'SmartFormsWebPartStrings';
+import { formatString } from '../../utils/localeUtils';
 import {
   ContextualMenuItemType,
   Dropdown,
@@ -16,6 +18,7 @@ import {
   getFieldTypeMeta,
   IFormDefinition,
   IFormField,
+  IMessageBag,
   IResponseItem
 } from '../../models';
 import {
@@ -26,25 +29,31 @@ import {
 } from '../../utils/formUtils';
 import { answeredCount, segmentBy } from '../../utils/analytics';
 import { IThemeInfo, MAX_CATEGORICAL_SERIES } from '../../utils/theme';
-import { QuestionChart } from './QuestionChart';
+import { IDrillTarget, QuestionChart } from './QuestionChart';
 
 export interface ISummaryViewProps {
   definition: IFormDefinition;
   items: IResponseItem[];
   theme: IThemeInfo;
-  onDrillDown?: (field: IFormField, categoryLabel: string) => void;
+  onDrillDown?: (field: IFormField, target?: IDrillTarget) => void;
+  locale?: string;
 }
 
-const CHART_LABELS: { [kind: string]: string } = {
-  auto: 'Automatic',
-  bar: 'Bars',
-  column: 'Columns',
-  donut: 'Donut',
-  stat: 'Statistics',
-  gauge: 'Gauge',
-  histogram: 'Histogram',
-  words: 'Word frequency',
-  table: 'Table'
+const messages = strings as unknown as IMessageBag;
+
+const chartLabel = (kind: string): string => {
+  const labels: { [kind: string]: string } = {
+    auto: strings.Responses_Dashboard_ChartAuto,
+    bar: strings.Responses_Dashboard_ChartBars,
+    column: strings.Responses_Dashboard_ChartColumns,
+    donut: strings.Responses_Dashboard_ChartDonut,
+    stat: strings.Responses_Dashboard_ChartStatistics,
+    gauge: strings.Responses_Dashboard_ChartGauge,
+    histogram: strings.Responses_Dashboard_ChartHistogram,
+    words: strings.Responses_Dashboard_ChartWordFrequency,
+    table: strings.Responses_Dashboard_ChartTable
+  };
+  return labels[kind] || kind;
 };
 
 const CHART_ICONS: { [kind: string]: string } = {
@@ -85,11 +94,11 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
     if (!segmentField) {
       return undefined;
     }
-    const all = segmentBy(segmentField, items);
+    const all = segmentBy(segmentField, items, messages, props.locale);
     // too many segments makes every card unreadable; keep the largest few
     const sorted = all.slice().sort((a, b) => b.items.length - a.items.length);
     return sorted.slice(0, 6);
-  }, [segmentField, items]);
+  }, [segmentField, items, props.locale]);
 
   const chartFor = (field: IFormField): ChartKind => {
     const override = chartOverrides[field.id];
@@ -101,7 +110,7 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
     const options: ChartKind[] = (['auto'] as ChartKind[]).concat(availableCharts(field));
     const items2: IContextualMenuItem[] = options.map((kind) => ({
       key: kind,
-      text: CHART_LABELS[kind] || kind,
+      text: chartLabel(kind),
       iconProps: { iconName: CHART_ICONS[kind] || 'BarChartVertical' },
       canCheck: true,
       checked: current === kind,
@@ -111,9 +120,9 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
       items2.push({ key: 'div', itemType: ContextualMenuItemType.Divider });
       items2.push({
         key: 'drill',
-        text: 'See all answers in the table',
+        text: strings.Responses_Summary_SeeAllAnswers,
         iconProps: { iconName: 'Table' },
-        onClick: () => props.onDrillDown && props.onDrillDown(field, '')
+        onClick: () => props.onDrillDown && props.onDrillDown(field)
       });
     }
     return { items: items2 };
@@ -123,8 +132,8 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
     return (
       <div className={styles.empty}>
         <Icon iconName="BarChartVerticalFill" className={styles.emptyIcon} />
-        <div className={styles.emptyTitle}>No responses yet</div>
-        <p className={styles.emptyBody}>Every question will get its own summary here.</p>
+        <div className={styles.emptyTitle}>{strings.Responses_Dashboard_EmptyTitle}</div>
+        <p className={styles.emptyBody}>{strings.Responses_Summary_EmptyBody}</p>
       </div>
     );
   }
@@ -144,16 +153,22 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
             <Icon iconName={meta.icon} />
           </span>
           <div className={styles.summaryCardTitleGroup}>
-            <div className={styles.summaryCardTitle}>{field.title || 'Untitled question'}</div>
+            <div className={styles.summaryCardTitle}>{field.title || strings.Responses_Dashboard_UntitledQuestion}</div>
             <div className={styles.summaryCardMeta}>
-              {answeredCount(field, items)} of {items.length} answered · {meta.label}
+              {formatString(strings.Responses_Summary_AnsweredOfType, {
+                answered: answeredCount(field, items),
+                total: items.length,
+                type: meta.label
+              })}
             </div>
           </div>
           <div className={styles.summaryCardActions}>
             <IconButton
               iconProps={{ iconName: 'MoreVertical' }}
-              title="Chart options"
-              ariaLabel={'Chart options for ' + (field.title || 'question')}
+              title={strings.Responses_Dashboard_ChartOptions}
+              ariaLabel={formatString(strings.Responses_Dashboard_ChartOptionsFor, {
+                title: field.title || strings.Responses_Dashboard_QuestionFallback
+              })}
               menuProps={chartMenu(field)}
               onRenderMenuIcon={() => null}
             />
@@ -164,12 +179,16 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
           {segments ? (
             <div className={styles.segmentGroup}>
               {segments.map((segment) => (
-                <div key={segment.label} className={styles.segmentBlock}>
+                <div key={segment.filterValue} className={styles.segmentBlock}>
                   <div className={styles.segmentHeader}>
                     <span>{segment.label}</span>
                     <span className={styles.segmentCount}>
-                      {segment.items.length}{' '}
-                      {segment.items.length === 1 ? 'response' : 'responses'}
+                      {formatString(
+                        segment.items.length === 1
+                          ? strings.Responses_Summary_ResponseCountOne
+                          : strings.Responses_Summary_ResponseCountOther,
+                        { count: segment.items.length }
+                      )}
                     </span>
                   </div>
                   <QuestionChart
@@ -178,6 +197,7 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
                     chart={chart}
                     theme={theme}
                     compact={true}
+                    locale={props.locale}
                     onDrillDown={props.onDrillDown}
                   />
                 </div>
@@ -189,6 +209,7 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
               items={items}
               chart={chart}
               theme={theme}
+              locale={props.locale}
               onDrillDown={props.onDrillDown}
             />
           )}
@@ -204,16 +225,21 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
           <Dropdown
             className={styles.filterDropdown}
             label={undefined}
-            placeholder="Compare by…"
-            options={[{ key: '', text: 'No comparison' }].concat(
-              segmentOptions.map((f) => ({ key: f.id, text: 'By ' + (f.title || 'untitled') }))
+            placeholder={strings.Responses_Summary_CompareBy}
+            options={[{ key: '', text: strings.Responses_Summary_NoComparison }].concat(
+              segmentOptions.map((f) => ({ key: f.id, text: formatString(strings.Responses_Summary_ByField, {
+                  title: f.title || strings.Responses_Summary_Untitled
+                }) }))
             )}
             selectedKey={segmentFieldId}
             onChange={(_e, option) => setSegmentFieldId(option ? String(option.key) : '')}
           />
           {segmentField && (
             <span className={styles.filterChip}>
-              <Icon iconName="GroupedList" /> Split by {segmentField.title || 'question'}
+              <Icon iconName="GroupedList" />{' '}
+              {formatString(strings.Responses_Summary_SplitBy, {
+                title: segmentField.title || strings.Responses_Dashboard_QuestionFallback
+              })}
             </span>
           )}
         </div>
@@ -221,16 +247,18 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
 
       {segments && segments.length === 0 && (
         <MessageBar messageBarType={MessageBarType.info}>
-          No responses answered &ldquo;{segmentField ? segmentField.title : ''}&rdquo;, so there is
-          nothing to compare.
+          {formatString(strings.Responses_Summary_NothingToCompare, {
+            title: segmentField ? segmentField.title : ''
+          })}
         </MessageBar>
       )}
 
       {segmentField && segments && segments.length > 0 && (
         <div className={styles.segmentNote}>
-          Showing the {segments.length} largest groups. A response that selected several answers
-          appears in every matching group, so group totals can add up to more than{' '}
-          {items.length}.
+          {formatString(strings.Responses_Summary_SegmentNote, {
+            groups: segments.length,
+            total: items.length
+          })}
         </div>
       )}
 
@@ -240,8 +268,7 @@ export const SummaryView: React.FunctionComponent<ISummaryViewProps> = (props) =
 
       {fields.length > MAX_CATEGORICAL_SERIES && !segments && (
         <div className={styles.segmentNote}>
-          Charts with more than {MAX_CATEGORICAL_SERIES} categories group the smallest into
-          &ldquo;Other&rdquo; — switch a card to Table to see every value.
+          {formatString(strings.Responses_Summary_OtherNote, { max: MAX_CATEGORICAL_SERIES })}
         </div>
       )}
     </div>
